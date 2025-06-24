@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Search, Settings, Bell, Calendar, Hash, User, Trash2, Edit3, Clock } from 'lucide-react';
+import { Plus, Search, Settings, Bell, Calendar, Trash2, Clock } from 'lucide-react';
+import CalendarSettings from './components/CalendarSettings';
+import ScheduleView from './components/ScheduleView';
+import { scheduleTask, estimateTaskTime } from './services/scheduler';
+import { createEvent, isSignedIn } from './services/googleCalendar';
 
 // Types
-interface Task {
+export interface Task {
   id: string;
   title: string;
   description?: string;
@@ -14,6 +18,11 @@ interface Task {
   notificationTime?: Date;
   createdAt: Date;
   updatedAt: Date;
+  // Google Calendar integration fields
+  calendarEvents?: CalendarEvent[];
+  scheduledStartDate?: Date;
+  scheduledEndDate?: Date;
+  workspace?: string;
 }
 
 interface Project {
@@ -29,19 +38,48 @@ interface Workspace {
   color: string;
 }
 
+// Google Calendar integration types
+export interface WorkingHours {
+  monday: { start: string; end: string; enabled: boolean };
+  tuesday: { start: string; end: string; enabled: boolean };
+  wednesday: { start: string; end: string; enabled: boolean };
+  thursday: { start: string; end: string; enabled: boolean };
+  friday: { start: string; end: string; enabled: boolean };
+  saturday: { start: string; end: string; enabled: boolean };
+  sunday: { start: string; end: string; enabled: boolean };
+}
+
+export interface CalendarEvent {
+  id: string;
+  taskId: string;
+  phase: 'incubation' | 'design' | 'implementation' | 'improvement';
+  startTime: Date;
+  endTime: Date;
+  googleEventId?: string;
+}
+
+export interface UserSettings {
+  workingHours: WorkingHours;
+  googleCalendarEnabled: boolean;
+  defaultTaskDuration: number; // minutes
+  bufferTime: number; // buffer time between tasks (minutes)
+  googleAccessToken?: string;
+  googleRefreshToken?: string;
+}
+
 // Utility functions for natural language processing
 const parseQuickInput = (input: string): Partial<Task> => {
-  console.log('Parsing input:', input); // デバッグ用
-  
+  console.log('🔍 Parsing input:', input);
+
   // ハッシュタグ抽出: #買い物 #緊急
   const hashtags = [...input.matchAll(/#([^\s]+)/g)].map(m => m[1]);
-  console.log('Extracted hashtags:', hashtags);
-  
+  console.log('📝 Extracted hashtags:', hashtags);
+
   // プロジェクト抽出: プロジェクト:家事 or @家事
   const projectMatch = input.match(/(?:プロジェクト:|@)([^\s]+)/);
   const project = projectMatch?.[1];
-  console.log('Extracted project:', project);
-  
+  console.log('📁 Extracted project:', project);
+
   // 優先度抽出: ！！！ or 重要 or 緊急
   let priority: 1 | 2 | 3 = 2;
   if (input.includes('！！！') || input.includes('緊急') || input.includes('高')) {
@@ -53,11 +91,15 @@ const parseQuickInput = (input: string): Partial<Task> => {
   } else if (input.includes('低') || input.includes('後で')) {
     priority = 1;
   }
-  console.log('Extracted priority:', priority);
-  
+  console.log('⭐ Extracted priority:', priority);
+
   // 日時解析
+  console.log('📅 Starting datetime parsing...');
   const { dueDate, notificationTime } = parseDatetime(input);
-  console.log('Extracted dates:', { dueDate, notificationTime });
+  console.log('📅 Final extracted dates:', {
+    dueDate: dueDate ? dueDate.toLocaleString('ja-JP') : 'なし',
+    notificationTime: notificationTime ? notificationTime.toLocaleString('ja-JP') : 'なし'
+  });
   
   // ステータス判定
   let status: Task['status'] = 'todo';
@@ -97,28 +139,30 @@ const parseDatetime = (input: string) => {
   const now = new Date();
   let dueDate: Date | undefined;
   let notificationTime: Date | undefined;
-  
-  // 明日15時
+
+  // 明日15時 - 時間指定がある場合はdueDateとnotificationTimeの両方を設定
   const tomorrowMatch = input.match(/明日\s*(\d{1,2})時/);
   if (tomorrowMatch) {
     const hour = parseInt(tomorrowMatch[1]);
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(hour, 0, 0, 0);
+    dueDate = new Date(tomorrow); // dueDateも設定
     notificationTime = tomorrow;
-    console.log('Tomorrow match found:', tomorrow);
+    console.log('Tomorrow with time match found:', tomorrow);
   }
-  
-  // 今日17時
+
+  // 今日17時 - 時間指定がある場合はdueDateとnotificationTimeの両方を設定
   const todayMatch = input.match(/今日\s*(\d{1,2})時/);
   if (todayMatch) {
     const hour = parseInt(todayMatch[1]);
     const today = new Date(now);
     today.setHours(hour, 0, 0, 0);
+    dueDate = new Date(today); // dueDateも設定
     notificationTime = today;
-    console.log('Today match found:', today);
+    console.log('Today with time match found:', today);
   }
-  
+
   // 明日（時間指定なし）
   if (input.includes('明日') && !tomorrowMatch) {
     const tomorrow = new Date(now);
@@ -127,7 +171,7 @@ const parseDatetime = (input: string) => {
     dueDate = tomorrow;
     console.log('Tomorrow dueDate set:', tomorrow);
   }
-  
+
   // 今日（時間指定なし）
   if (input.includes('今日') && !todayMatch) {
     const today = new Date(now);
@@ -135,7 +179,7 @@ const parseDatetime = (input: string) => {
     dueDate = today;
     console.log('Today dueDate set:', today);
   }
-  
+
   // 曜日指定
   const dayMap: Record<string, number> = { 月: 1, 火: 2, 水: 3, 木: 4, 金: 5, 土: 6, 日: 0 };
   const dayMatch = input.match(/(月|火|水|木|金|土|日)曜日?/);
@@ -144,18 +188,22 @@ const parseDatetime = (input: string) => {
     const nextWeekday = new Date(now);
     const daysUntilTarget = (targetDay - now.getDay() + 7) % 7 || 7;
     nextWeekday.setDate(now.getDate() + daysUntilTarget);
+    nextWeekday.setHours(23, 59, 59, 999); // その日の終わりまで
     dueDate = nextWeekday;
     console.log('Day match found:', nextWeekday);
   }
-  
+
   // 2時間後
   const hoursMatch = input.match(/(\d+)時間後/);
   if (hoursMatch) {
     const hours = parseInt(hoursMatch[1]);
-    notificationTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
-    console.log('Hours match found:', notificationTime);
+    const futureTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
+    dueDate = new Date(futureTime); // dueDateも設定
+    notificationTime = futureTime;
+    console.log('Hours match found:', futureTime);
   }
-  
+
+  console.log('parseDatetime result:', { dueDate, notificationTime });
   return { dueDate, notificationTime };
 };
 
@@ -164,7 +212,28 @@ const STORAGE_KEYS = {
   TASKS: 'familytasks_tasks',
   PROJECTS: 'familytasks_projects',
   WORKSPACES: 'familytasks_workspaces',
-  CURRENT_WORKSPACE: 'familytasks_current_workspace'
+  CURRENT_WORKSPACE: 'familytasks_current_workspace',
+  USER_SETTINGS: 'familytasks_user_settings',
+  GOOGLE_ACCESS_TOKEN: 'familytasks_google_access_token',
+  GOOGLE_TOKEN_EXPIRY: 'familytasks_google_token_expiry'
+};
+
+// Default settings
+const DEFAULT_WORKING_HOURS: WorkingHours = {
+  monday: { start: '09:00', end: '18:00', enabled: true },
+  tuesday: { start: '09:00', end: '18:00', enabled: true },
+  wednesday: { start: '09:00', end: '18:00', enabled: true },
+  thursday: { start: '09:00', end: '18:00', enabled: true },
+  friday: { start: '09:00', end: '18:00', enabled: true },
+  saturday: { start: '10:00', end: '16:00', enabled: false },
+  sunday: { start: '10:00', end: '16:00', enabled: false }
+};
+
+const DEFAULT_USER_SETTINGS: UserSettings = {
+  workingHours: DEFAULT_WORKING_HOURS,
+  googleCalendarEnabled: false,
+  defaultTaskDuration: 60, // 1 hour
+  bufferTime: 15 // 15 minutes
 };
 
 const loadFromStorage = <T,>(key: string, defaultValue: T): T => {
@@ -200,24 +269,31 @@ const saveToStorage = <T,>(key: string, value: T): void => {
 const FamilyTasksPWA: React.FC = () => {
   // State
   const [tasks, setTasks] = useState<Task[]>(() => loadFromStorage(STORAGE_KEYS.TASKS, []));
-  const [projects, setProjects] = useState<Project[]>(() => loadFromStorage(STORAGE_KEYS.PROJECTS, [
+  const [projects] = useState<Project[]>(() => loadFromStorage(STORAGE_KEYS.PROJECTS, [
     { id: '1', name: '家事', color: '#10B981', icon: '🏠' },
     { id: '2', name: '仕事', color: '#3B82F6', icon: '💼' },
     { id: '3', name: '買い物', color: '#F59E0B', icon: '🛒' }
   ]));
-  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => loadFromStorage(STORAGE_KEYS.WORKSPACES, [
+  const [workspaces] = useState<Workspace[]>(() => loadFromStorage(STORAGE_KEYS.WORKSPACES, [
     { id: '1', name: 'プライベート', color: '#3B82F6' },
     { id: '2', name: '家族', color: '#10B981' }
   ]));
-  const [currentWorkspace, setCurrentWorkspace] = useState<string>(() => 
+  const [currentWorkspace, setCurrentWorkspace] = useState<string>(() =>
     loadFromStorage(STORAGE_KEYS.CURRENT_WORKSPACE, '1')
+  );
+  const [userSettings, setUserSettings] = useState<UserSettings>(() =>
+    loadFromStorage(STORAGE_KEYS.USER_SETTINGS, DEFAULT_USER_SETTINGS)
   );
   
   const [quickInput, setQuickInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCalendarSettings, setShowCalendarSettings] = useState(false);
+  const [showScheduleView, setShowScheduleView] = useState(false);
   const [notification, setNotification] = useState<string>('');
+  const [isAddingTask, setIsAddingTask] = useState(false);
+  const [isSchedulingTask, setIsSchedulingTask] = useState(false);
   
   const quickInputRef = useRef<HTMLInputElement>(null);
   
@@ -225,23 +301,29 @@ const FamilyTasksPWA: React.FC = () => {
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.TASKS, tasks);
   }, [tasks]);
-  
+
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.PROJECTS, projects);
   }, [projects]);
-  
+
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.WORKSPACES, workspaces);
   }, [workspaces]);
-  
+
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.CURRENT_WORKSPACE, currentWorkspace);
   }, [currentWorkspace]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.USER_SETTINGS, userSettings);
+  }, [userSettings]);
   
   // Quick add task
-  const handleQuickAdd = () => {
-    if (!quickInput.trim()) return;
-    
+  const handleQuickAdd = async () => {
+    if (!quickInput.trim() || isAddingTask) return;
+
+    setIsAddingTask(true);
+
     const parsed = parseQuickInput(quickInput);
     const newTask: Task = {
       id: Date.now().toString(),
@@ -254,20 +336,82 @@ const FamilyTasksPWA: React.FC = () => {
       dueDate: parsed.dueDate,
       notificationTime: parsed.notificationTime,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      workspace: currentWorkspace
     };
-    
+
+    // Auto-schedule to Google Calendar if enabled and has due date
+    console.log('Calendar scheduling check:', {
+      googleCalendarEnabled: userSettings.googleCalendarEnabled,
+      isSignedIn: isSignedIn(),
+      hasDueDate: !!newTask.dueDate,
+      taskTitle: newTask.title,
+      dueDate: newTask.dueDate,
+      userSettings: userSettings
+    });
+
+    if (userSettings.googleCalendarEnabled && isSignedIn() && newTask.dueDate) {
+      try {
+        // Show progress notification
+        setNotification('📅 Googleカレンダーにスケジュール中...');
+
+        console.log('Starting calendar scheduling for task:', newTask.title);
+        const estimation = estimateTaskTime(newTask);
+        console.log('Task estimation:', estimation);
+
+        setNotification('🔍 最適な時間を検索中...');
+        const calendarEvents = await scheduleTask(
+          newTask,
+          estimation,
+          userSettings.workingHours,
+          userSettings.bufferTime
+        );
+        console.log('Generated calendar events:', calendarEvents);
+
+        // Create events in Google Calendar
+        setNotification('📝 カレンダーイベントを作成中...');
+        const googleEvents = [];
+        for (let i = 0; i < calendarEvents.length; i++) {
+          const event = calendarEvents[i];
+          setNotification(`📝 イベント作成中... (${i + 1}/${calendarEvents.length})`);
+          console.log('Creating calendar event:', event);
+          const googleEvent = await createEvent(event, newTask.title);
+          console.log('Created Google event:', googleEvent);
+          googleEvents.push({
+            ...event,
+            googleEventId: googleEvent.id
+          });
+        }
+
+        newTask.calendarEvents = googleEvents;
+        newTask.scheduledStartDate = calendarEvents[0]?.startTime;
+        newTask.scheduledEndDate = calendarEvents[calendarEvents.length - 1]?.endTime;
+        console.log('Successfully scheduled task to calendar');
+      } catch (error) {
+        console.error('Failed to schedule task to calendar:', error);
+        setNotification('❌ カレンダー追加に失敗しました');
+        setTimeout(() => setNotification(''), 3000);
+        // Continue with task creation even if calendar scheduling fails
+      }
+    }
+
     setTasks(prev => [newTask, ...prev]);
     setQuickInput('');
-    
+
     // Show confirmation
-    setNotification(`タスク「${newTask.title}」を追加しました`);
+    if (newTask.calendarEvents && newTask.calendarEvents.length > 0) {
+      setNotification(`タスク「${newTask.title}」をGoogleカレンダーに追加しました`);
+    } else {
+      setNotification(`タスク「${newTask.title}」を追加しました`);
+    }
     setTimeout(() => setNotification(''), 3000);
-    
+
     // Schedule notification if needed
     if (newTask.notificationTime) {
       scheduleNotification(newTask);
     }
+
+    setIsAddingTask(false);
   };
   
   // Schedule browser notification
@@ -318,13 +462,20 @@ const FamilyTasksPWA: React.FC = () => {
   
   // Update task status
   const updateTaskStatus = (taskId: string, newStatus: Task['status']) => {
-    setTasks(prev => prev.map(task => 
-      task.id === taskId 
+    setTasks(prev => prev.map(task =>
+      task.id === taskId
         ? { ...task, status: newStatus, updatedAt: new Date() }
         : task
     ));
   };
-  
+
+  // Update task
+  const updateTask = (updatedTask: Task) => {
+    setTasks(prev => prev.map(task =>
+      task.id === updatedTask.id ? updatedTask : task
+    ));
+  };
+
   // Delete task
   const deleteTask = (taskId: string) => {
     setTasks(prev => prev.filter(task => task.id !== taskId));
@@ -401,27 +552,35 @@ const FamilyTasksPWA: React.FC = () => {
               isOverdue ? 'text-red-600 font-medium' : 'text-gray-600'
             }`}>
               <Calendar className="w-3 h-3" />
-              <span>期限: {task.dueDate.toLocaleDateString('ja-JP', { 
-                month: 'short', 
+              <span>期限: {task.dueDate.toLocaleDateString('ja-JP', {
+                month: 'short',
                 day: 'numeric',
                 weekday: 'short'
               })}</span>
               {isOverdue && <span className="text-red-500 font-bold">⚠️ 期限切れ</span>}
             </div>
           )}
-          
+
           {task.notificationTime && (
             <div className={`flex items-center gap-1 text-xs ${
               isUpcoming ? 'text-orange-600 font-medium' : 'text-gray-600'
             }`}>
               <Bell className="w-3 h-3" />
-              <span>通知: {task.notificationTime.toLocaleString('ja-JP', { 
+              <span>通知: {task.notificationTime.toLocaleString('ja-JP', {
                 month: 'short',
                 day: 'numeric',
-                hour: '2-digit', 
+                hour: '2-digit',
                 minute: '2-digit'
               })}</span>
               {isUpcoming && <span className="text-orange-500">🔔 まもなく</span>}
+            </div>
+          )}
+
+          {/* Calendar integration status */}
+          {task.calendarEvents && task.calendarEvents.length > 0 && (
+            <div className="flex items-center gap-1 text-xs text-green-600">
+              <Calendar className="w-3 h-3" />
+              <span>📅 Googleカレンダーに追加済み ({task.calendarEvents.length}件)</span>
             </div>
           )}
         </div>
@@ -442,7 +601,7 @@ const FamilyTasksPWA: React.FC = () => {
     status: Task['status']; 
     tasks: Task[]; 
     color: string 
-  }> = ({ title, status, tasks, color }) => (
+  }> = ({ title, tasks, color }) => (
     <div className="flex-1 min-w-0">
       <div className="flex items-center gap-2 mb-3">
         <div className={`w-3 h-3 rounded-full`} style={{ backgroundColor: color }}></div>
@@ -491,13 +650,27 @@ const FamilyTasksPWA: React.FC = () => {
             </div>
             
             <div className="flex items-center gap-2">
-              <button 
+              <button
+                onClick={() => setShowScheduleView(true)}
+                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+                title="スケジュール表示"
+              >
+                <Clock className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setShowCalendarSettings(true)}
+                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+                title="カレンダー設定"
+              >
+                <Calendar className="w-5 h-5" />
+              </button>
+              <button
                 onClick={() => setShowSettings(!showSettings)}
                 className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
               >
                 <Settings className="w-5 h-5" />
               </button>
-              <button 
+              <button
                 onClick={requestNotificationPermission}
                 className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
               >
@@ -518,15 +691,27 @@ const FamilyTasksPWA: React.FC = () => {
                 type="text"
                 value={quickInput}
                 onChange={(e) => setQuickInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleQuickAdd()}
-                placeholder="タスクを追加: 「牛乳買う #買い物 @家事 明日15時」"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                onKeyPress={(e) => e.key === 'Enter' && !isAddingTask && handleQuickAdd()}
+                placeholder={isAddingTask ? "タスクを追加中..." : "タスクを追加: 「牛乳買う #買い物 @家事 明日15時」"}
+                disabled={isAddingTask}
+                className={`w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  isAddingTask ? 'bg-gray-100 cursor-not-allowed' : ''
+                }`}
               />
               <button
                 onClick={handleQuickAdd}
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 bg-blue-500 text-white rounded hover:bg-blue-600"
+                disabled={isAddingTask}
+                className={`absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 rounded ${
+                  isAddingTask
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-blue-500 hover:bg-blue-600'
+                } text-white`}
               >
-                <Plus className="w-5 h-5" />
+                {isAddingTask ? (
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <Plus className="w-5 h-5" />
+                )}
               </button>
             </div>
           </div>
@@ -547,7 +732,13 @@ const FamilyTasksPWA: React.FC = () => {
       
       {/* Notification */}
       {notification && (
-        <div className="fixed top-32 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50">
+        <div className={`fixed top-32 left-1/2 transform -translate-x-1/2 text-white px-4 py-2 rounded-lg shadow-lg z-50 ${
+          notification.includes('❌') || notification.includes('失敗')
+            ? 'bg-red-500'
+            : notification.includes('📅') || notification.includes('🔍') || notification.includes('📝')
+            ? 'bg-blue-500'
+            : 'bg-green-500'
+        }`}>
           {notification}
         </div>
       )}
@@ -699,6 +890,82 @@ const FamilyTasksPWA: React.FC = () => {
                 </div>
               )}
               
+              {/* Calendar integration button */}
+              {userSettings.googleCalendarEnabled && isSignedIn() && selectedTask.dueDate && (
+                <div className="pt-4 border-t border-gray-200">
+                  {selectedTask.calendarEvents && selectedTask.calendarEvents.length > 0 ? (
+                    <div className="text-sm text-green-600 flex items-center gap-2">
+                      <Calendar className="w-4 h-4" />
+                      <span>Googleカレンダーに追加済み ({selectedTask.calendarEvents.length}件)</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        if (isSchedulingTask) return;
+                        setIsSchedulingTask(true);
+                        try {
+                          setNotification('📅 Googleカレンダーにスケジュール中...');
+                          const estimation = estimateTaskTime(selectedTask);
+                          const calendarEvents = await scheduleTask(
+                            selectedTask,
+                            estimation,
+                            userSettings.workingHours,
+                            userSettings.bufferTime
+                          );
+
+                          setNotification('📝 カレンダーイベントを作成中...');
+                          // Create events in Google Calendar
+                          const googleEvents = [];
+                          for (const event of calendarEvents) {
+                            const googleEvent = await createEvent(event, selectedTask.title);
+                            googleEvents.push({
+                              ...event,
+                              googleEventId: googleEvent.id
+                            });
+                          }
+
+                          const updatedTask = {
+                            ...selectedTask,
+                            calendarEvents: googleEvents,
+                            scheduledStartDate: calendarEvents[0]?.startTime,
+                            scheduledEndDate: calendarEvents[calendarEvents.length - 1]?.endTime
+                          };
+
+                          updateTask(updatedTask);
+                          setSelectedTask(updatedTask);
+                          setNotification(`✅ タスク「${selectedTask.title}」をGoogleカレンダーに追加しました`);
+                          setTimeout(() => setNotification(''), 3000);
+                        } catch (error) {
+                          console.error('Failed to schedule task:', error);
+                          setNotification('❌ カレンダーへの追加に失敗しました');
+                          setTimeout(() => setNotification(''), 3000);
+                        } finally {
+                          setIsSchedulingTask(false);
+                        }
+                      }}
+                      disabled={isSchedulingTask}
+                      className={`w-full py-2 px-4 rounded flex items-center justify-center gap-2 ${
+                        isSchedulingTask
+                          ? 'bg-gray-400 cursor-not-allowed'
+                          : 'bg-blue-500 hover:bg-blue-600'
+                      } text-white`}
+                    >
+                      {isSchedulingTask ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          追加中...
+                        </>
+                      ) : (
+                        <>
+                          <Calendar className="w-4 h-4" />
+                          Googleカレンダーに追加
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="flex gap-2 pt-4">
                 <button
                   onClick={() => deleteTask(selectedTask.id)}
@@ -717,6 +984,25 @@ const FamilyTasksPWA: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Calendar Settings Modal */}
+      {showCalendarSettings && (
+        <CalendarSettings
+          userSettings={userSettings}
+          onSettingsChange={setUserSettings}
+          onClose={() => setShowCalendarSettings(false)}
+        />
+      )}
+
+      {/* Schedule View Modal */}
+      {showScheduleView && (
+        <ScheduleView
+          tasks={tasks}
+          userSettings={userSettings}
+          onTaskUpdate={updateTask}
+          onClose={() => setShowScheduleView(false)}
+        />
       )}
     </div>
   );
