@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Search, Settings, Bell, Calendar, Trash2, Clock } from 'lucide-react';
+import { Plus, Search, Settings, Bell, Calendar, Trash2, Clock, Brain, Zap } from 'lucide-react';
 import CalendarSettings from './components/CalendarSettings';
 import ScheduleView from './components/ScheduleView';
+import ReschedulingNotification from './components/ReschedulingNotification';
+import LearningInsights from './components/LearningInsights';
 import { scheduleTask, estimateTaskTime } from './services/scheduler';
 import { createEvent, isSignedIn } from './services/googleCalendar';
+import { useRealTimeSync } from './hooks/useRealTimeSync';
 
 // Types
 export interface Task {
@@ -23,6 +26,16 @@ export interface Task {
   scheduledStartDate?: Date;
   scheduledEndDate?: Date;
   workspace?: string;
+  // Learning and history data fields for issue #9
+  estimation?: TaskEstimation;
+  actualTime?: {
+    準備: number;
+    設計: number;
+    実装: number;
+    改善: number;
+  };
+  lastRescheduled?: Date;
+  reschedulingHistory?: ReschedulingEvent[];
 }
 
 interface Project {
@@ -52,7 +65,7 @@ export interface WorkingHours {
 export interface CalendarEvent {
   id: string;
   taskId: string;
-  phase: 'incubation' | 'design' | 'implementation' | 'improvement';
+  phase: '準備' | '設計' | '実装' | '改善';
   startTime: Date;
   endTime: Date;
   googleEventId?: string;
@@ -65,6 +78,58 @@ export interface UserSettings {
   bufferTime: number; // buffer time between tasks (minutes)
   googleAccessToken?: string;
   googleRefreshToken?: string;
+}
+
+// Learning and history data types for issue #9
+export interface TaskEstimation {
+  準備: number;    // minutes
+  設計: number;        // minutes
+  実装: number; // minutes
+  改善: number;   // minutes
+  total: number;         // minutes
+  confidence: number;    // 0-1
+}
+
+export interface TaskHistory {
+  taskId: string;
+  originalEstimation: TaskEstimation;
+  actualTime: {
+    準備: number;
+    設計: number;
+    実装: number;
+    改善: number;
+  };
+  adjustmentReason: 'user_manual' | 'calendar_conflict' | 'priority_change';
+  timestamp: Date;
+}
+
+export interface LearningData {
+  userId: string;
+  taskType: string; // タスクのカテゴリ分類
+  estimationAccuracy: number; // 見積もり精度（0-1）
+  commonPatterns: {
+    underestimationRate: number;
+    overestimationRate: number;
+    phaseDistribution: {
+      準備: number;
+      設計: number;
+      実装: number;
+      改善: number;
+    };
+  };
+  lastUpdated: Date;
+}
+
+export interface ReschedulingEvent {
+  id: string;
+  triggeredBy: 'calendar_change' | 'task_update' | 'manual_adjustment';
+  affectedTasks: string[];
+  timestamp: Date;
+  changes: {
+    taskId: string;
+    oldSchedule: { start: Date; end: Date };
+    newSchedule: { start: Date; end: Date };
+  }[];
 }
 
 // Utility functions for natural language processing
@@ -215,7 +280,11 @@ const STORAGE_KEYS = {
   CURRENT_WORKSPACE: 'familytasks_current_workspace',
   USER_SETTINGS: 'familytasks_user_settings',
   GOOGLE_ACCESS_TOKEN: 'familytasks_google_access_token',
-  GOOGLE_TOKEN_EXPIRY: 'familytasks_google_token_expiry'
+  GOOGLE_TOKEN_EXPIRY: 'familytasks_google_token_expiry',
+  // Learning data storage keys for issue #9
+  TASK_HISTORY: 'familytasks_task_history',
+  LEARNING_DATA: 'familytasks_learning_data',
+  RESCHEDULING_EVENTS: 'familytasks_rescheduling_events'
 };
 
 // Default settings
@@ -291,12 +360,28 @@ const FamilyTasksPWA: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showCalendarSettings, setShowCalendarSettings] = useState(false);
   const [showScheduleView, setShowScheduleView] = useState(false);
+  const [showLearningInsights, setShowLearningInsights] = useState(false);
   const [notification, setNotification] = useState<string>('');
+  const [errorNotification, setErrorNotification] = useState<string>('');
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [isSchedulingTask, setIsSchedulingTask] = useState(false);
   
   const quickInputRef = useRef<HTMLInputElement>(null);
-  
+
+  // Real-time sync hook for issue #9
+  const {
+    isConnected,
+    syncStatus,
+    pendingRescheduling,
+    applyRescheduling,
+    rejectRescheduling,
+    triggerReschedulingCheck,
+    getImprovedEstimation
+  } = useRealTimeSync(tasks, userSettings.workingHours, setTasks, (error) => {
+    setErrorNotification(error);
+    setTimeout(() => setErrorNotification(''), 5000);
+  });
+
   // Auto-save to localStorage
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.TASKS, tasks);
@@ -356,8 +441,12 @@ const FamilyTasksPWA: React.FC = () => {
         setNotification('📅 Googleカレンダーにスケジュール中...');
 
         console.log('Starting calendar scheduling for task:', newTask.title);
-        const estimation = estimateTaskTime(newTask);
-        console.log('Task estimation:', estimation);
+        // Use improved estimation from learning engine
+        const estimation = getImprovedEstimation(newTask);
+        console.log('Improved task estimation:', estimation);
+
+        // Store estimation in task for learning purposes
+        newTask.estimation = estimation;
 
         setNotification('🔍 最適な時間を検索中...');
         const calendarEvents = await scheduleTask(
@@ -650,6 +739,29 @@ const FamilyTasksPWA: React.FC = () => {
             </div>
             
             <div className="flex items-center gap-2">
+              {/* Real-time sync status indicator */}
+              <div className="flex items-center gap-1 px-2 py-1 rounded-full text-xs bg-gray-100">
+                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className="text-gray-600">
+                  {syncStatus === 'syncing' ? '同期中' : isConnected ? '接続中' : '未接続'}
+                </span>
+              </div>
+
+              <button
+                onClick={() => setShowLearningInsights(true)}
+                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+                title="学習インサイト"
+              >
+                <Brain className="w-5 h-5" />
+              </button>
+              <button
+                onClick={triggerReschedulingCheck}
+                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+                title="再スケジューリング"
+                disabled={syncStatus === 'syncing'}
+              >
+                <Zap className={`w-5 h-5 ${syncStatus === 'syncing' ? 'animate-pulse' : ''}`} />
+              </button>
               <button
                 onClick={() => setShowScheduleView(true)}
                 className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
@@ -740,6 +852,22 @@ const FamilyTasksPWA: React.FC = () => {
             : 'bg-green-500'
         }`}>
           {notification}
+        </div>
+      )}
+
+      {/* Error Notification */}
+      {errorNotification && (
+        <div className="fixed top-44 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg z-50">
+          <div className="flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{errorNotification}</span>
+            <button
+              onClick={() => setErrorNotification('')}
+              className="ml-2 text-white hover:text-gray-200"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
       
@@ -1002,6 +1130,24 @@ const FamilyTasksPWA: React.FC = () => {
           userSettings={userSettings}
           onTaskUpdate={updateTask}
           onClose={() => setShowScheduleView(false)}
+        />
+      )}
+
+      {/* Learning Insights Modal */}
+      {showLearningInsights && (
+        <LearningInsights
+          onClose={() => setShowLearningInsights(false)}
+        />
+      )}
+
+      {/* Rescheduling Notification */}
+      {pendingRescheduling && (
+        <ReschedulingNotification
+          event={pendingRescheduling}
+          tasks={tasks}
+          onApprove={() => applyRescheduling(pendingRescheduling)}
+          onReject={rejectRescheduling}
+          onClose={rejectRescheduling}
         />
       )}
     </div>
