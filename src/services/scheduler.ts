@@ -1,4 +1,4 @@
-import { Task, WorkingHours, CalendarEvent } from '../App';
+import { Task, WorkingHours, CalendarEvent, TaskEstimation } from '../App';
 import { getEvents, isTimeSlotAvailable } from './googleCalendar';
 
 // Time slot interface
@@ -6,16 +6,6 @@ interface TimeSlot {
   start: Date;
   end: Date;
   duration: number; // minutes
-}
-
-// Task estimation interface (placeholder for AI integration)
-interface TaskEstimation {
-  incubation: number;    // minutes
-  design: number;        // minutes
-  implementation: number; // minutes
-  improvement: number;   // minutes
-  total: number;         // minutes
-  confidence: number;    // 0-1
 }
 
 // Find available time slots within working hours
@@ -143,10 +133,10 @@ export const scheduleTask = async (
   console.log('scheduleTask: Task has due date:', task.dueDate);
 
   const phases: Array<{ phase: CalendarEvent['phase']; duration: number }> = [
-    { phase: 'incubation' as const, duration: estimation.incubation },
-    { phase: 'design' as const, duration: estimation.design },
-    { phase: 'implementation' as const, duration: estimation.implementation },
-    { phase: 'improvement' as const, duration: estimation.improvement }
+    { phase: '準備' as const, duration: estimation.準備 },
+    { phase: '設計' as const, duration: estimation.設計 },
+    { phase: '実装' as const, duration: estimation.実装 },
+    { phase: '改善' as const, duration: estimation.改善 }
   ].filter(p => p.duration > 0);
 
   console.log('scheduleTask: Phases to schedule:', phases);
@@ -161,11 +151,11 @@ export const scheduleTask = async (
     calendarId
   );
 
-  // Schedule phases in reverse order (from due date backwards)
+  // Schedule phases in chronological order (準備 -> 設計 -> 実装 -> 改善)
   const scheduledEvents: CalendarEvent[] = [];
-  let remainingPhases = [...phases].reverse();
+  let remainingPhases = [...phases]; // Remove .reverse() to maintain chronological order
 
-  for (const slot of availableSlots.reverse()) {
+  for (const slot of availableSlots) { // Remove .reverse() to start from earliest available time
     if (remainingPhases.length === 0) break;
 
     let slotStart = new Date(slot.start);
@@ -199,10 +189,24 @@ export const scheduleTask = async (
   }
 
   if (remainingPhases.length > 0) {
-    throw new Error('Not enough available time to schedule all task phases before due date');
+    const totalRemainingTime = remainingPhases.reduce((sum, phase) => sum + phase.duration, 0);
+    const totalAvailableTime = availableSlots.reduce((sum, slot) => sum + slot.duration, 0);
+
+    console.warn(`Scheduling constraint violation for task "${task.title}":`, {
+      remainingPhases: remainingPhases.length,
+      totalRemainingTime,
+      totalAvailableTime,
+      dueDate: task.dueDate,
+      scheduledEvents: scheduledEvents.length
+    });
+
+    throw new Error(
+      `Not enough available time to schedule all task phases before due date. ` +
+      `Need ${totalRemainingTime} minutes, but only ${totalAvailableTime} minutes available.`
+    );
   }
 
-  return scheduledEvents.reverse(); // Return in chronological order
+  return scheduledEvents; // Return in chronological order (準備 -> 設計 -> 実装 -> 改善)
 };
 
 // Get optimal task duration based on available slots
@@ -278,18 +282,29 @@ export const getNextAvailableSlot = async (
   return availableSlots.find(slot => slot.duration >= duration) || null;
 };
 
-// Placeholder for AI estimation (to be implemented with AI service)
-export const estimateTaskTime = (_task: Task): TaskEstimation => {
-  // This is a placeholder implementation
-  // In the real implementation, this would call the AI service
-  const baseTime = 60; // 1 hour base time
+// Enhanced AI estimation using learning engine (issue #9)
+export const estimateTaskTime = (task: Task): TaskEstimation => {
+  // Import learning engine dynamically to avoid circular dependencies
+  try {
+    const { learningEngine } = require('./learningEngine');
+    return learningEngine.getImprovedEstimation(task);
+  } catch (error) {
+    console.warn('Learning engine not available, using basic estimation:', error);
 
-  return {
-    incubation: Math.floor(baseTime * 0.2),     // 20%
-    design: Math.floor(baseTime * 0.3),         // 30%
-    implementation: Math.floor(baseTime * 0.4), // 40%
-    improvement: Math.floor(baseTime * 0.1),    // 10%
-    total: baseTime,
-    confidence: 0.7
-  };
+    // Fallback to basic estimation
+    const baseTime = 60; // 1 hour base time
+
+    // Adjust based on priority
+    const priorityMultiplier = task.priority === 3 ? 1.5 : task.priority === 1 ? 0.7 : 1.0;
+    const adjustedTime = Math.floor(baseTime * priorityMultiplier);
+
+    return {
+      準備: Math.floor(adjustedTime * 0.2),     // 20%
+      設計: Math.floor(adjustedTime * 0.3),         // 30%
+      実装: Math.floor(adjustedTime * 0.4), // 40%
+      改善: Math.floor(adjustedTime * 0.1),    // 10%
+      total: adjustedTime,
+      confidence: 0.7
+    };
+  }
 };

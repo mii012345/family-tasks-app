@@ -27,7 +27,7 @@ const CalendarSettings: React.FC<CalendarSettingsProps> = ({
 
   // Initialize Google API on component mount
   useEffect(() => {
-    let intervalId: number | null = null;
+    let intervalId: NodeJS.Timeout | null = null;
 
     const initAPI = async () => {
       const success = await initializeGoogleAPI();

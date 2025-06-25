@@ -1,0 +1,3331 @@
+From ad372be553c228309926d4cd54ad5e19ba40f35f Mon Sep 17 00:00:00 2001
+From: tanezaki <y.tanezaki@yagish.jp>
+Date: Tue, 24 Jun 2025 07:38:39 +0900
+Subject: [PATCH] =?UTF-8?q?feat:=20Google=E3=82=AB=E3=83=AC=E3=83=B3?=
+ =?UTF-8?q?=E3=83=80=E3=83=BC=E9=80=A3=E6=90=BA=EF=BC=86=E8=87=AA=E5=8B=95?=
+ =?UTF-8?q?=E3=82=B9=E3=82=B1=E3=82=B8=E3=83=A5=E3=83=BC=E3=83=AA=E3=83=B3?=
+ =?UTF-8?q?=E3=82=B0=E6=A9=9F=E8=83=BD=E3=81=AE=E5=AE=9F=E8=A3=85?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Google Identity Services (GIS) を使用した認証システム
+- タスク追加時の自動カレンダー連携
+- AI見積もりに基づくフェーズ別スケジューリング
+- 認証情報の永続化（ローカルストレージ）
+- ローディング表示と進捗通知
+- 就業時間設定とカレンダー設定UI
+- スケジュール表示機能
+
+Closes #8
+---
+ .env.example                        |  17 +
+ package-lock.json                   | 618 +++++++++++++++++++++++++++-
+ package.json                        |   8 +-
+ src/App.tsx                         | 398 +++++++++++++++---
+ src/components/CalendarSettings.tsx | 356 ++++++++++++++++
+ src/components/ScheduleView.tsx     | 378 +++++++++++++++++
+ src/services/googleCalendar.ts      | 560 +++++++++++++++++++++++++
+ src/services/scheduler.ts           | 295 +++++++++++++
+ src/vite-env.d.ts                   |  10 +
+ vite.config.ts                      |   6 +-
+ 10 files changed, 2564 insertions(+), 82 deletions(-)
+ create mode 100644 .env.example
+ create mode 100644 src/components/CalendarSettings.tsx
+ create mode 100644 src/components/ScheduleView.tsx
+ create mode 100644 src/services/googleCalendar.ts
+ create mode 100644 src/services/scheduler.ts
+ create mode 100644 src/vite-env.d.ts
+
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..4f51257
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,17 @@
++# Google Calendar API Configuration
++VITE_GOOGLE_CLIENT_ID=your_google_client_id_here
++VITE_GOOGLE_API_KEY=your_google_api_key_here
++
++# Google Calendar API Scopes
++# https://www.googleapis.com/auth/calendar - Full access to calendars
++# https://www.googleapis.com/auth/calendar.readonly - Read-only access to calendars
++# https://www.googleapis.com/auth/calendar.events - Access to events
++
++# Instructions:
++# 1. Go to Google Cloud Console (https://console.cloud.google.com/)
++# 2. Create a new project or select existing project
++# 3. Enable Google Calendar API
++# 4. Create credentials (OAuth 2.0 Client ID)
++# 5. Add authorized JavaScript origins: http://localhost:3000, https://yourdomain.com
++# 6. Copy the Client ID and API Key to this file
++# 7. Rename this file to .env
+diff --git a/package-lock.json b/package-lock.json
+index b8a4044..6087ac2 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -8,6 +8,8 @@
+       "name": "family-tasks-app",
+       "version": "1.0.0",
+       "dependencies": {
++        "@google-cloud/local-auth": "^3.0.1",
++        "googleapis": "^150.0.1",
+         "lucide-react": "^0.263.1",
+         "react": "^18.2.0",
+         "react-dom": "^18.2.0"
+@@ -1969,6 +1971,21 @@
+         "node": ">=12"
+       }
+     },
++    "node_modules/@google-cloud/local-auth": {
++      "version": "3.0.1",
++      "resolved": "https://registry.npmjs.org/@google-cloud/local-auth/-/local-auth-3.0.1.tgz",
++      "integrity": "sha512-YJ3GFbksfHyEarbVHPSCzhKpjbnlAhdzg2SEf79l6ODukrSM1qUOqfopY232Xkw26huKSndyzmJz+A6b2WYn7Q==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "arrify": "^2.0.1",
++        "google-auth-library": "^9.0.0",
++        "open": "^7.0.3",
++        "server-destroy": "^1.0.1"
++      },
++      "engines": {
++        "node": ">=14.0.0"
++      }
++    },
+     "node_modules/@isaacs/cliui": {
+       "version": "8.0.2",
+       "resolved": "https://registry.npmjs.org/@isaacs/cliui/-/cliui-8.0.2.tgz",
+@@ -2332,6 +2349,15 @@
+         "node": ">=0.4.0"
+       }
+     },
++    "node_modules/agent-base": {
++      "version": "7.1.3",
++      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.3.tgz",
++      "integrity": "sha512-jRR5wdylq8CkOe6hei19GGZnxM6rBGwFl3Bg0YItGDimvjGtAvdZk4Pu6Cl4u4Igsws4a1fd1Vq3ezrhn4KmFw==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 14"
++      }
++    },
+     "node_modules/ajv": {
+       "version": "8.17.1",
+       "resolved": "https://registry.npmjs.org/ajv/-/ajv-8.17.1.tgz",
+@@ -2445,6 +2471,15 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/arrify": {
++      "version": "2.0.1",
++      "resolved": "https://registry.npmjs.org/arrify/-/arrify-2.0.1.tgz",
++      "integrity": "sha512-3duEwti880xqi4eAMN8AyR4a0ByT90zoYdLlevfrvU43vb0YZwZVfxOgxWrLXXXpyugL0hNZc9G6BiB5B3nUug==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=8"
++      }
++    },
+     "node_modules/async": {
+       "version": "3.2.6",
+       "resolved": "https://registry.npmjs.org/async/-/async-3.2.6.tgz",
+@@ -2575,6 +2610,35 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/base64-js": {
++      "version": "1.5.1",
++      "resolved": "https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz",
++      "integrity": "sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/feross"
++        },
++        {
++          "type": "patreon",
++          "url": "https://www.patreon.com/feross"
++        },
++        {
++          "type": "consulting",
++          "url": "https://feross.org/support"
++        }
++      ],
++      "license": "MIT"
++    },
++    "node_modules/bignumber.js": {
++      "version": "9.3.0",
++      "resolved": "https://registry.npmjs.org/bignumber.js/-/bignumber.js-9.3.0.tgz",
++      "integrity": "sha512-EM7aMFTXbptt/wZdMlBv2t8IViwQL+h6SLHosp8Yf0dqJMTnY6iL32opnAB6kAdL0SZPuvcAzFr31o0c/R3/RA==",
++      "license": "MIT",
++      "engines": {
++        "node": "*"
++      }
++    },
+     "node_modules/binary-extensions": {
+       "version": "2.3.0",
+       "resolved": "https://registry.npmjs.org/binary-extensions/-/binary-extensions-2.3.0.tgz",
+@@ -2644,6 +2708,12 @@
+         "node": "^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7"
+       }
+     },
++    "node_modules/buffer-equal-constant-time": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant-time-1.0.1.tgz",
++      "integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",
++      "license": "BSD-3-Clause"
++    },
+     "node_modules/buffer-from": {
+       "version": "1.1.2",
+       "resolved": "https://registry.npmjs.org/buffer-from/-/buffer-from-1.1.2.tgz",
+@@ -2674,7 +2744,6 @@
+       "version": "1.0.2",
+       "resolved": "https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz",
+       "integrity": "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "es-errors": "^1.3.0",
+@@ -2688,7 +2757,6 @@
+       "version": "1.0.4",
+       "resolved": "https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz",
+       "integrity": "sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "call-bind-apply-helpers": "^1.0.2",
+@@ -2900,6 +2968,15 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/data-uri-to-buffer": {
++      "version": "4.0.1",
++      "resolved": "https://registry.npmjs.org/data-uri-to-buffer/-/data-uri-to-buffer-4.0.1.tgz",
++      "integrity": "sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 12"
++      }
++    },
+     "node_modules/data-view-buffer": {
+       "version": "1.0.2",
+       "resolved": "https://registry.npmjs.org/data-view-buffer/-/data-view-buffer-1.0.2.tgz",
+@@ -2958,7 +3035,6 @@
+       "version": "4.4.1",
+       "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.1.tgz",
+       "integrity": "sha512-KcKCqiftBJcZr++7ykoDIEwSa3XWowTfNPo92BYxjXiyYEVrUQh2aLyhxBCwww+heortUFxEJYcRzosstTEBYQ==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "ms": "^2.1.3"
+@@ -3036,7 +3112,6 @@
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz",
+       "integrity": "sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "call-bind-apply-helpers": "^1.0.1",
+@@ -3054,6 +3129,15 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/ecdsa-sig-formatter": {
++      "version": "1.0.11",
++      "resolved": "https://registry.npmjs.org/ecdsa-sig-formatter/-/ecdsa-sig-formatter-1.0.11.tgz",
++      "integrity": "sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "safe-buffer": "^5.0.1"
++      }
++    },
+     "node_modules/ejs": {
+       "version": "3.1.10",
+       "resolved": "https://registry.npmjs.org/ejs/-/ejs-3.1.10.tgz",
+@@ -3157,7 +3241,6 @@
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz",
+       "integrity": "sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">= 0.4"
+@@ -3167,7 +3250,6 @@
+       "version": "1.3.0",
+       "resolved": "https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz",
+       "integrity": "sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">= 0.4"
+@@ -3177,7 +3259,6 @@
+       "version": "1.1.1",
+       "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.1.tgz",
+       "integrity": "sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "es-errors": "^1.3.0"
+@@ -3285,6 +3366,12 @@
+         "node": ">=0.10.0"
+       }
+     },
++    "node_modules/extend": {
++      "version": "3.0.2",
++      "resolved": "https://registry.npmjs.org/extend/-/extend-3.0.2.tgz",
++      "integrity": "sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==",
++      "license": "MIT"
++    },
+     "node_modules/fast-deep-equal": {
+       "version": "3.1.3",
+       "resolved": "https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz",
+@@ -3356,6 +3443,29 @@
+         "reusify": "^1.0.4"
+       }
+     },
++    "node_modules/fetch-blob": {
++      "version": "3.2.0",
++      "resolved": "https://registry.npmjs.org/fetch-blob/-/fetch-blob-3.2.0.tgz",
++      "integrity": "sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/jimmywarting"
++        },
++        {
++          "type": "paypal",
++          "url": "https://paypal.me/jimmywarting"
++        }
++      ],
++      "license": "MIT",
++      "dependencies": {
++        "node-domexception": "^1.0.0",
++        "web-streams-polyfill": "^3.0.3"
++      },
++      "engines": {
++        "node": "^12.20 || >= 14.13"
++      }
++    },
+     "node_modules/filelist": {
+       "version": "1.0.4",
+       "resolved": "https://registry.npmjs.org/filelist/-/filelist-1.0.4.tgz",
+@@ -3425,6 +3535,18 @@
+         "url": "https://github.com/sponsors/isaacs"
+       }
+     },
++    "node_modules/formdata-polyfill": {
++      "version": "4.0.10",
++      "resolved": "https://registry.npmjs.org/formdata-polyfill/-/formdata-polyfill-4.0.10.tgz",
++      "integrity": "sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==",
++      "license": "MIT",
++      "dependencies": {
++        "fetch-blob": "^3.1.2"
++      },
++      "engines": {
++        "node": ">=12.20.0"
++      }
++    },
+     "node_modules/fraction.js": {
+       "version": "4.3.7",
+       "resolved": "https://registry.npmjs.org/fraction.js/-/fraction.js-4.3.7.tgz",
+@@ -3481,7 +3603,6 @@
+       "version": "1.1.2",
+       "resolved": "https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz",
+       "integrity": "sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==",
+-      "dev": true,
+       "license": "MIT",
+       "funding": {
+         "url": "https://github.com/sponsors/ljharb"
+@@ -3518,6 +3639,36 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/gaxios": {
++      "version": "6.7.1",
++      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-6.7.1.tgz",
++      "integrity": "sha512-LDODD4TMYx7XXdpwxAVRAIAuB0bzv0s+ywFonY46k126qzQHT9ygyoa9tncmOiQmmDrik65UYsEkv3lbfqQ3yQ==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "extend": "^3.0.2",
++        "https-proxy-agent": "^7.0.1",
++        "is-stream": "^2.0.0",
++        "node-fetch": "^2.6.9",
++        "uuid": "^9.0.1"
++      },
++      "engines": {
++        "node": ">=14"
++      }
++    },
++    "node_modules/gcp-metadata": {
++      "version": "6.1.1",
++      "resolved": "https://registry.npmjs.org/gcp-metadata/-/gcp-metadata-6.1.1.tgz",
++      "integrity": "sha512-a4tiq7E0/5fTjxPAaH4jpjkSv/uCaU2p5KC6HVGrvl0cDjA8iBZv4vv1gyzlmK0ZUKqwpOyQMKzZQe3lTit77A==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "gaxios": "^6.1.1",
++        "google-logging-utils": "^0.0.2",
++        "json-bigint": "^1.0.0"
++      },
++      "engines": {
++        "node": ">=14"
++      }
++    },
+     "node_modules/gensync": {
+       "version": "1.0.0-beta.2",
+       "resolved": "https://registry.npmjs.org/gensync/-/gensync-1.0.0-beta.2.tgz",
+@@ -3532,7 +3683,6 @@
+       "version": "1.3.0",
+       "resolved": "https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz",
+       "integrity": "sha512-9fSjSaos/fRIVIp+xSJlE6lfwhES7LNtKaCBIamHsjr2na1BiABJPo0mOjjz8GJDURarmCPGqaiVg5mfjb98CQ==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "call-bind-apply-helpers": "^1.0.2",
+@@ -3564,7 +3714,6 @@
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz",
+       "integrity": "sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "dunder-proto": "^1.0.1",
+@@ -3653,11 +3802,237 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/google-auth-library": {
++      "version": "9.15.1",
++      "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-9.15.1.tgz",
++      "integrity": "sha512-Jb6Z0+nvECVz+2lzSMt9u98UsoakXxA2HGHMCxh+so3n90XgYWkq5dur19JAJV7ONiJY22yBTyJB1TSkvPq9Ng==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "base64-js": "^1.3.0",
++        "ecdsa-sig-formatter": "^1.0.11",
++        "gaxios": "^6.1.1",
++        "gcp-metadata": "^6.1.0",
++        "gtoken": "^7.0.0",
++        "jws": "^4.0.0"
++      },
++      "engines": {
++        "node": ">=14"
++      }
++    },
++    "node_modules/google-logging-utils": {
++      "version": "0.0.2",
++      "resolved": "https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-0.0.2.tgz",
++      "integrity": "sha512-NEgUnEcBiP5HrPzufUkBzJOD/Sxsco3rLNo1F1TNf7ieU8ryUzBhqba8r756CjLX7rn3fHl6iLEwPYuqpoKgQQ==",
++      "license": "Apache-2.0",
++      "engines": {
++        "node": ">=14"
++      }
++    },
++    "node_modules/googleapis": {
++      "version": "150.0.1",
++      "resolved": "https://registry.npmjs.org/googleapis/-/googleapis-150.0.1.tgz",
++      "integrity": "sha512-9Wa9vm3WtDpss0VFBHsbZWcoRccpOSWdpz7YIfb1LBXopZJEg/Zc8ymmaSgvDkP4FhN+pqPS9nZjO7REAJWSUg==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "google-auth-library": "^10.0.0-rc.1",
++        "googleapis-common": "^8.0.2-rc.0"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis-common": {
++      "version": "8.0.2-rc.0",
++      "resolved": "https://registry.npmjs.org/googleapis-common/-/googleapis-common-8.0.2-rc.0.tgz",
++      "integrity": "sha512-JTcxRvmFa9Ec1uyfMEimEMeeKq1sHNZX3vn2qmoUMtnvixXXvcqTcbDZvEZXkEWpGlPlOf4joyep6/qs0BrLyg==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "extend": "^3.0.2",
++        "gaxios": "^7.0.0-rc.4",
++        "google-auth-library": "^10.0.0-rc.1",
++        "qs": "^6.7.0",
++        "url-template": "^2.0.8"
++      },
++      "engines": {
++        "node": ">=18.0.0"
++      }
++    },
++    "node_modules/googleapis-common/node_modules/gaxios": {
++      "version": "7.1.0",
++      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.1.0.tgz",
++      "integrity": "sha512-y1Q0MX1Ba6eg67Zz92kW0MHHhdtWksYckQy1KJsI6P4UlDQ8cvdvpLEPslD/k7vFkdPppMESFGTvk7XpSiKj8g==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "extend": "^3.0.2",
++        "https-proxy-agent": "^7.0.1",
++        "node-fetch": "^3.3.2"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis-common/node_modules/gcp-metadata": {
++      "version": "7.0.0",
++      "resolved": "https://registry.npmjs.org/gcp-metadata/-/gcp-metadata-7.0.0.tgz",
++      "integrity": "sha512-3PfRTzvT3Msu0Hy8Gf9ypxJvaClG2IB9pyH0r8QOmRBW5mUcrHgYpF4GYP+XulDbfhxEhBYtJtJJQb5S2wM+LA==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "gaxios": "^7.0.0",
++        "google-logging-utils": "^1.0.0",
++        "json-bigint": "^1.0.0"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis-common/node_modules/google-auth-library": {
++      "version": "10.1.0",
++      "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.1.0.tgz",
++      "integrity": "sha512-GspVjZj1RbyRWpQ9FbAXMKjFGzZwDKnUHi66JJ+tcjcu5/xYAP1pdlWotCuIkMwjfVsxxDvsGZXGLzRt72D0sQ==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "base64-js": "^1.3.0",
++        "ecdsa-sig-formatter": "^1.0.11",
++        "gaxios": "^7.0.0",
++        "gcp-metadata": "^7.0.0",
++        "google-logging-utils": "^1.0.0",
++        "gtoken": "^8.0.0",
++        "jws": "^4.0.0"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis-common/node_modules/google-logging-utils": {
++      "version": "1.1.1",
++      "resolved": "https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-1.1.1.tgz",
++      "integrity": "sha512-rcX58I7nqpu4mbKztFeOAObbomBbHU2oIb/d3tJfF3dizGSApqtSwYJigGCooHdnMyQBIw8BrWyK96w3YXgr6A==",
++      "license": "Apache-2.0",
++      "engines": {
++        "node": ">=14"
++      }
++    },
++    "node_modules/googleapis-common/node_modules/gtoken": {
++      "version": "8.0.0",
++      "resolved": "https://registry.npmjs.org/gtoken/-/gtoken-8.0.0.tgz",
++      "integrity": "sha512-+CqsMbHPiSTdtSO14O51eMNlrp9N79gmeqmXeouJOhfucAedHw9noVe/n5uJk3tbKE6a+6ZCQg3RPhVhHByAIw==",
++      "license": "MIT",
++      "dependencies": {
++        "gaxios": "^7.0.0",
++        "jws": "^4.0.0"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis-common/node_modules/node-fetch": {
++      "version": "3.3.2",
++      "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz",
++      "integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
++      "license": "MIT",
++      "dependencies": {
++        "data-uri-to-buffer": "^4.0.0",
++        "fetch-blob": "^3.1.4",
++        "formdata-polyfill": "^4.0.10"
++      },
++      "engines": {
++        "node": "^12.20.0 || ^14.13.1 || >=16.0.0"
++      },
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/node-fetch"
++      }
++    },
++    "node_modules/googleapis/node_modules/gaxios": {
++      "version": "7.1.0",
++      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.1.0.tgz",
++      "integrity": "sha512-y1Q0MX1Ba6eg67Zz92kW0MHHhdtWksYckQy1KJsI6P4UlDQ8cvdvpLEPslD/k7vFkdPppMESFGTvk7XpSiKj8g==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "extend": "^3.0.2",
++        "https-proxy-agent": "^7.0.1",
++        "node-fetch": "^3.3.2"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis/node_modules/gcp-metadata": {
++      "version": "7.0.0",
++      "resolved": "https://registry.npmjs.org/gcp-metadata/-/gcp-metadata-7.0.0.tgz",
++      "integrity": "sha512-3PfRTzvT3Msu0Hy8Gf9ypxJvaClG2IB9pyH0r8QOmRBW5mUcrHgYpF4GYP+XulDbfhxEhBYtJtJJQb5S2wM+LA==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "gaxios": "^7.0.0",
++        "google-logging-utils": "^1.0.0",
++        "json-bigint": "^1.0.0"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis/node_modules/google-auth-library": {
++      "version": "10.1.0",
++      "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.1.0.tgz",
++      "integrity": "sha512-GspVjZj1RbyRWpQ9FbAXMKjFGzZwDKnUHi66JJ+tcjcu5/xYAP1pdlWotCuIkMwjfVsxxDvsGZXGLzRt72D0sQ==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "base64-js": "^1.3.0",
++        "ecdsa-sig-formatter": "^1.0.11",
++        "gaxios": "^7.0.0",
++        "gcp-metadata": "^7.0.0",
++        "google-logging-utils": "^1.0.0",
++        "gtoken": "^8.0.0",
++        "jws": "^4.0.0"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis/node_modules/google-logging-utils": {
++      "version": "1.1.1",
++      "resolved": "https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-1.1.1.tgz",
++      "integrity": "sha512-rcX58I7nqpu4mbKztFeOAObbomBbHU2oIb/d3tJfF3dizGSApqtSwYJigGCooHdnMyQBIw8BrWyK96w3YXgr6A==",
++      "license": "Apache-2.0",
++      "engines": {
++        "node": ">=14"
++      }
++    },
++    "node_modules/googleapis/node_modules/gtoken": {
++      "version": "8.0.0",
++      "resolved": "https://registry.npmjs.org/gtoken/-/gtoken-8.0.0.tgz",
++      "integrity": "sha512-+CqsMbHPiSTdtSO14O51eMNlrp9N79gmeqmXeouJOhfucAedHw9noVe/n5uJk3tbKE6a+6ZCQg3RPhVhHByAIw==",
++      "license": "MIT",
++      "dependencies": {
++        "gaxios": "^7.0.0",
++        "jws": "^4.0.0"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/googleapis/node_modules/node-fetch": {
++      "version": "3.3.2",
++      "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz",
++      "integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
++      "license": "MIT",
++      "dependencies": {
++        "data-uri-to-buffer": "^4.0.0",
++        "fetch-blob": "^3.1.4",
++        "formdata-polyfill": "^4.0.10"
++      },
++      "engines": {
++        "node": "^12.20.0 || ^14.13.1 || >=16.0.0"
++      },
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/node-fetch"
++      }
++    },
+     "node_modules/gopd": {
+       "version": "1.2.0",
+       "resolved": "https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz",
+       "integrity": "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">= 0.4"
+@@ -3673,6 +4048,19 @@
+       "dev": true,
+       "license": "ISC"
+     },
++    "node_modules/gtoken": {
++      "version": "7.1.0",
++      "resolved": "https://registry.npmjs.org/gtoken/-/gtoken-7.1.0.tgz",
++      "integrity": "sha512-pCcEwRi+TKpMlxAQObHDQ56KawURgyAf6jtIY046fJ5tIv3zDe/LEIubckAO8fj6JnAxLdmWkUfNyulQ2iKdEw==",
++      "license": "MIT",
++      "dependencies": {
++        "gaxios": "^6.0.0",
++        "jws": "^4.0.0"
++      },
++      "engines": {
++        "node": ">=14.0.0"
++      }
++    },
+     "node_modules/has-bigints": {
+       "version": "1.1.0",
+       "resolved": "https://registry.npmjs.org/has-bigints/-/has-bigints-1.1.0.tgz",
+@@ -3729,7 +4117,6 @@
+       "version": "1.1.0",
+       "resolved": "https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz",
+       "integrity": "sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">= 0.4"
+@@ -3758,7 +4145,6 @@
+       "version": "2.0.2",
+       "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.2.tgz",
+       "integrity": "sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "function-bind": "^1.1.2"
+@@ -3767,6 +4153,19 @@
+         "node": ">= 0.4"
+       }
+     },
++    "node_modules/https-proxy-agent": {
++      "version": "7.0.6",
++      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz",
++      "integrity": "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==",
++      "license": "MIT",
++      "dependencies": {
++        "agent-base": "^7.1.2",
++        "debug": "4"
++      },
++      "engines": {
++        "node": ">= 14"
++      }
++    },
+     "node_modules/idb": {
+       "version": "7.1.1",
+       "resolved": "https://registry.npmjs.org/idb/-/idb-7.1.1.tgz",
+@@ -3956,6 +4355,21 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/is-docker": {
++      "version": "2.2.1",
++      "resolved": "https://registry.npmjs.org/is-docker/-/is-docker-2.2.1.tgz",
++      "integrity": "sha512-F+i2BKsFrH66iaUFc0woD8sLy8getkwTwtOBjvs56Cx4CgJDeKQeqfz8wAYiSb8JOprWhHH5p77PbmYCvvUuXQ==",
++      "license": "MIT",
++      "bin": {
++        "is-docker": "cli.js"
++      },
++      "engines": {
++        "node": ">=8"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/sindresorhus"
++      }
++    },
+     "node_modules/is-extglob": {
+       "version": "2.1.1",
+       "resolved": "https://registry.npmjs.org/is-extglob/-/is-extglob-2.1.1.tgz",
+@@ -4156,7 +4570,6 @@
+       "version": "2.0.1",
+       "resolved": "https://registry.npmjs.org/is-stream/-/is-stream-2.0.1.tgz",
+       "integrity": "sha512-hFoiJiTl63nn+kstHGBtewWSKnQLpyb155KHheA1l39uvtO9nWIop1p3udqPcUd/xbF1VLMO4n7OI6p7RbngDg==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=8"
+@@ -4262,6 +4675,18 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/is-wsl": {
++      "version": "2.2.0",
++      "resolved": "https://registry.npmjs.org/is-wsl/-/is-wsl-2.2.0.tgz",
++      "integrity": "sha512-fKzAra0rGJUUBwGBgNkHZuToZcn+TtXHpeCgmkMJMMYx1sQDYaCSyjJBSCa2nH1DGm7s3n1oBnohoVTBaN7Lww==",
++      "license": "MIT",
++      "dependencies": {
++        "is-docker": "^2.0.0"
++      },
++      "engines": {
++        "node": ">=8"
++      }
++    },
+     "node_modules/isarray": {
+       "version": "2.0.5",
+       "resolved": "https://registry.npmjs.org/isarray/-/isarray-2.0.5.tgz",
+@@ -4364,6 +4789,15 @@
+         "node": ">=6"
+       }
+     },
++    "node_modules/json-bigint": {
++      "version": "1.0.0",
++      "resolved": "https://registry.npmjs.org/json-bigint/-/json-bigint-1.0.0.tgz",
++      "integrity": "sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==",
++      "license": "MIT",
++      "dependencies": {
++        "bignumber.js": "^9.0.0"
++      }
++    },
+     "node_modules/json-schema": {
+       "version": "0.4.0",
+       "resolved": "https://registry.npmjs.org/json-schema/-/json-schema-0.4.0.tgz",
+@@ -4414,6 +4848,27 @@
+         "node": ">=0.10.0"
+       }
+     },
++    "node_modules/jwa": {
++      "version": "2.0.1",
++      "resolved": "https://registry.npmjs.org/jwa/-/jwa-2.0.1.tgz",
++      "integrity": "sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==",
++      "license": "MIT",
++      "dependencies": {
++        "buffer-equal-constant-time": "^1.0.1",
++        "ecdsa-sig-formatter": "1.0.11",
++        "safe-buffer": "^5.0.1"
++      }
++    },
++    "node_modules/jws": {
++      "version": "4.0.0",
++      "resolved": "https://registry.npmjs.org/jws/-/jws-4.0.0.tgz",
++      "integrity": "sha512-KDncfTmOZoOMTFG4mBlG0qUIOlc03fmzH+ru6RgYVZhPkyiy/92Owlt/8UEN+a4TXR1FQetfIpJE8ApdvdVxTg==",
++      "license": "MIT",
++      "dependencies": {
++        "jwa": "^2.0.0",
++        "safe-buffer": "^5.0.1"
++      }
++    },
+     "node_modules/leven": {
+       "version": "3.1.0",
+       "resolved": "https://registry.npmjs.org/leven/-/leven-3.1.0.tgz",
+@@ -4510,7 +4965,6 @@
+       "version": "1.1.0",
+       "resolved": "https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz",
+       "integrity": "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">= 0.4"
+@@ -4570,7 +5024,6 @@
+       "version": "2.1.3",
+       "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+-      "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/mz": {
+@@ -4604,6 +5057,68 @@
+         "node": "^10 || ^12 || ^13.7 || ^14 || >=15.0.1"
+       }
+     },
++    "node_modules/node-domexception": {
++      "version": "1.0.0",
++      "resolved": "https://registry.npmjs.org/node-domexception/-/node-domexception-1.0.0.tgz",
++      "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
++      "deprecated": "Use your platform's native DOMException instead",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/jimmywarting"
++        },
++        {
++          "type": "github",
++          "url": "https://paypal.me/jimmywarting"
++        }
++      ],
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.5.0"
++      }
++    },
++    "node_modules/node-fetch": {
++      "version": "2.7.0",
++      "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-2.7.0.tgz",
++      "integrity": "sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==",
++      "license": "MIT",
++      "dependencies": {
++        "whatwg-url": "^5.0.0"
++      },
++      "engines": {
++        "node": "4.x || >=6.0.0"
++      },
++      "peerDependencies": {
++        "encoding": "^0.1.0"
++      },
++      "peerDependenciesMeta": {
++        "encoding": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/node-fetch/node_modules/tr46": {
++      "version": "0.0.3",
++      "resolved": "https://registry.npmjs.org/tr46/-/tr46-0.0.3.tgz",
++      "integrity": "sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==",
++      "license": "MIT"
++    },
++    "node_modules/node-fetch/node_modules/webidl-conversions": {
++      "version": "3.0.1",
++      "resolved": "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-3.0.1.tgz",
++      "integrity": "sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==",
++      "license": "BSD-2-Clause"
++    },
++    "node_modules/node-fetch/node_modules/whatwg-url": {
++      "version": "5.0.0",
++      "resolved": "https://registry.npmjs.org/whatwg-url/-/whatwg-url-5.0.0.tgz",
++      "integrity": "sha512-saE57nupxk6v3HY35+jzBwYa0rKSy0XR8JSxZPwgLr7ys0IBzhGviA1/TUGJLmSVqs8pb9AnvICXEuOHLprYTw==",
++      "license": "MIT",
++      "dependencies": {
++        "tr46": "~0.0.3",
++        "webidl-conversions": "^3.0.0"
++      }
++    },
+     "node_modules/node-releases": {
+       "version": "2.0.19",
+       "resolved": "https://registry.npmjs.org/node-releases/-/node-releases-2.0.19.tgz",
+@@ -4655,7 +5170,6 @@
+       "version": "1.13.4",
+       "resolved": "https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz",
+       "integrity": "sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">= 0.4"
+@@ -4705,6 +5219,22 @@
+         "wrappy": "1"
+       }
+     },
++    "node_modules/open": {
++      "version": "7.4.2",
++      "resolved": "https://registry.npmjs.org/open/-/open-7.4.2.tgz",
++      "integrity": "sha512-MVHddDVweXZF3awtlAS+6pgKLlm/JgxZ90+/NBurBoQctVOOB/zDdVjcyPzQ+0laDGbsWgrRkflI65sQeOgT9Q==",
++      "license": "MIT",
++      "dependencies": {
++        "is-docker": "^2.0.0",
++        "is-wsl": "^2.1.1"
++      },
++      "engines": {
++        "node": ">=8"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/sindresorhus"
++      }
++    },
+     "node_modules/own-keys": {
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/own-keys/-/own-keys-1.0.1.tgz",
+@@ -5004,6 +5534,21 @@
+         "node": ">=6"
+       }
+     },
++    "node_modules/qs": {
++      "version": "6.14.0",
++      "resolved": "https://registry.npmjs.org/qs/-/qs-6.14.0.tgz",
++      "integrity": "sha512-YWWTjgABSKcvs/nWBi9PycY/JiPJqOD4JA6o9Sej2AtvSGarXxKC3OQSk4pAarbdQlKAh5D4FCQkJNkW+GAn3w==",
++      "license": "BSD-3-Clause",
++      "dependencies": {
++        "side-channel": "^1.1.0"
++      },
++      "engines": {
++        "node": ">=0.6"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/ljharb"
++      }
++    },
+     "node_modules/queue-microtask": {
+       "version": "1.2.3",
+       "resolved": "https://registry.npmjs.org/queue-microtask/-/queue-microtask-1.2.3.tgz",
+@@ -5315,7 +5860,6 @@
+       "version": "5.2.1",
+       "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz",
+       "integrity": "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==",
+-      "dev": true,
+       "funding": [
+         {
+           "type": "github",
+@@ -5396,6 +5940,12 @@
+         "randombytes": "^2.1.0"
+       }
+     },
++    "node_modules/server-destroy": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/server-destroy/-/server-destroy-1.0.1.tgz",
++      "integrity": "sha512-rb+9B5YBIEzYcD6x2VKidaa+cqYBJQKnU4oe4E3ANwRRN56yk/ua1YCJT1n21NTS8w6CcOclAKNP3PhdCXKYtQ==",
++      "license": "ISC"
++    },
+     "node_modules/set-function-length": {
+       "version": "1.2.2",
+       "resolved": "https://registry.npmjs.org/set-function-length/-/set-function-length-1.2.2.tgz",
+@@ -5472,7 +6022,6 @@
+       "version": "1.1.0",
+       "resolved": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.0.tgz",
+       "integrity": "sha512-ZX99e6tRweoUXqR+VBrslhda51Nh5MTQwou5tnUDgbtyM0dBgmhEDtWGP/xbKn6hqfPRHujUNwz5fy/wbbhnpw==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "es-errors": "^1.3.0",
+@@ -5492,7 +6041,6 @@
+       "version": "1.0.0",
+       "resolved": "https://registry.npmjs.org/side-channel-list/-/side-channel-list-1.0.0.tgz",
+       "integrity": "sha512-FCLHtRD/gnpCiCHEiJLOwdmFP+wzCmDEkc9y7NsYxeF4u7Btsn1ZuwgwJGxImImHicJArLP4R0yX4c2KCrMrTA==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "es-errors": "^1.3.0",
+@@ -5509,7 +6057,6 @@
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/side-channel-map/-/side-channel-map-1.0.1.tgz",
+       "integrity": "sha512-VCjCNfgMsby3tTdo02nbjtM/ewra6jPHmpThenkTYh8pG9ucZ/1P8So4u4FGBek/BjpOVsDCMoLA/iuBKIFXRA==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "call-bound": "^1.0.2",
+@@ -5528,7 +6075,6 @@
+       "version": "1.0.2",
+       "resolved": "https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz",
+       "integrity": "sha512-WPS/HvHQTYnHisLo9McqBHOJk2FkHO/tlpvldyrnem4aeQp4hai3gythswg6p01oSoTl58rcpiFAjF2br2Ak2A==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "call-bound": "^1.0.2",
+@@ -6274,6 +6820,12 @@
+         "browserslist": ">= 4.21.0"
+       }
+     },
++    "node_modules/url-template": {
++      "version": "2.0.8",
++      "resolved": "https://registry.npmjs.org/url-template/-/url-template-2.0.8.tgz",
++      "integrity": "sha512-XdVKMF4SJ0nP/O7XIPB0JwAEuT9lDIYnNsK8yGVe43y0AWoKeJNdv3ZNWh7ksJ6KqQFjOO6ox/VEitLnaVNufw==",
++      "license": "BSD"
++    },
+     "node_modules/util-deprecate": {
+       "version": "1.0.2",
+       "resolved": "https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz",
+@@ -6281,6 +6833,19 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/uuid": {
++      "version": "9.0.1",
++      "resolved": "https://registry.npmjs.org/uuid/-/uuid-9.0.1.tgz",
++      "integrity": "sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==",
++      "funding": [
++        "https://github.com/sponsors/broofa",
++        "https://github.com/sponsors/ctavan"
++      ],
++      "license": "MIT",
++      "bin": {
++        "uuid": "dist/bin/uuid"
++      }
++    },
+     "node_modules/vite": {
+       "version": "4.5.14",
+       "resolved": "https://registry.npmjs.org/vite/-/vite-4.5.14.tgz",
+@@ -6362,6 +6927,15 @@
+         "workbox-window": "^7.0.0"
+       }
+     },
++    "node_modules/web-streams-polyfill": {
++      "version": "3.3.3",
++      "resolved": "https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-3.3.3.tgz",
++      "integrity": "sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 8"
++      }
++    },
+     "node_modules/webidl-conversions": {
+       "version": "4.0.2",
+       "resolved": "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-4.0.2.tgz",
+diff --git a/package.json b/package.json
+index 1f9b3ad..fd69b08 100644
+--- a/package.json
++++ b/package.json
+@@ -5,9 +5,11 @@
+   "type": "module",
+   "private": true,
+   "dependencies": {
++    "@google-cloud/local-auth": "^3.0.1",
++    "googleapis": "^150.0.1",
++    "lucide-react": "^0.263.1",
+     "react": "^18.2.0",
+-    "react-dom": "^18.2.0",
+-    "lucide-react": "^0.263.1"
++    "react-dom": "^18.2.0"
+   },
+   "devDependencies": {
+     "@types/react": "^18.2.0",
+@@ -25,4 +27,4 @@
+     "build": "tsc && vite build",
+     "preview": "vite preview"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/App.tsx b/src/App.tsx
+index 06c1cd1..05536cd 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,8 +1,12 @@
+ import React, { useState, useEffect, useRef } from 'react';
+-import { Plus, Search, Settings, Bell, Calendar, Hash, User, Trash2, Edit3, Clock } from 'lucide-react';
++import { Plus, Search, Settings, Bell, Calendar, Trash2, Clock } from 'lucide-react';
++import CalendarSettings from './components/CalendarSettings';
++import ScheduleView from './components/ScheduleView';
++import { scheduleTask, estimateTaskTime } from './services/scheduler';
++import { createEvent, isSignedIn } from './services/googleCalendar';
+ 
+ // Types
+-interface Task {
++export interface Task {
+   id: string;
+   title: string;
+   description?: string;
+@@ -14,6 +18,11 @@ interface Task {
+   notificationTime?: Date;
+   createdAt: Date;
+   updatedAt: Date;
++  // Google Calendar integration fields
++  calendarEvents?: CalendarEvent[];
++  scheduledStartDate?: Date;
++  scheduledEndDate?: Date;
++  workspace?: string;
+ }
+ 
+ interface Project {
+@@ -29,19 +38,48 @@ interface Workspace {
+   color: string;
+ }
+ 
++// Google Calendar integration types
++export interface WorkingHours {
++  monday: { start: string; end: string; enabled: boolean };
++  tuesday: { start: string; end: string; enabled: boolean };
++  wednesday: { start: string; end: string; enabled: boolean };
++  thursday: { start: string; end: string; enabled: boolean };
++  friday: { start: string; end: string; enabled: boolean };
++  saturday: { start: string; end: string; enabled: boolean };
++  sunday: { start: string; end: string; enabled: boolean };
++}
++
++export interface CalendarEvent {
++  id: string;
++  taskId: string;
++  phase: 'incubation' | 'design' | 'implementation' | 'improvement';
++  startTime: Date;
++  endTime: Date;
++  googleEventId?: string;
++}
++
++export interface UserSettings {
++  workingHours: WorkingHours;
++  googleCalendarEnabled: boolean;
++  defaultTaskDuration: number; // minutes
++  bufferTime: number; // buffer time between tasks (minutes)
++  googleAccessToken?: string;
++  googleRefreshToken?: string;
++}
++
+ // Utility functions for natural language processing
+ const parseQuickInput = (input: string): Partial<Task> => {
+-  console.log('Parsing input:', input); // デバッグ用
+-  
++  console.log('🔍 Parsing input:', input);
++
+   // ハッシュタグ抽出: #買い物 #緊急
+   const hashtags = [...input.matchAll(/#([^\s]+)/g)].map(m => m[1]);
+-  console.log('Extracted hashtags:', hashtags);
+-  
++  console.log('📝 Extracted hashtags:', hashtags);
++
+   // プロジェクト抽出: プロジェクト:家事 or @家事
+   const projectMatch = input.match(/(?:プロジェクト:|@)([^\s]+)/);
+   const project = projectMatch?.[1];
+-  console.log('Extracted project:', project);
+-  
++  console.log('📁 Extracted project:', project);
++
+   // 優先度抽出: ！！！ or 重要 or 緊急
+   let priority: 1 | 2 | 3 = 2;
+   if (input.includes('！！！') || input.includes('緊急') || input.includes('高')) {
+@@ -53,11 +91,15 @@ const parseQuickInput = (input: string): Partial<Task> => {
+   } else if (input.includes('低') || input.includes('後で')) {
+     priority = 1;
+   }
+-  console.log('Extracted priority:', priority);
+-  
++  console.log('⭐ Extracted priority:', priority);
++
+   // 日時解析
++  console.log('📅 Starting datetime parsing...');
+   const { dueDate, notificationTime } = parseDatetime(input);
+-  console.log('Extracted dates:', { dueDate, notificationTime });
++  console.log('📅 Final extracted dates:', {
++    dueDate: dueDate ? dueDate.toLocaleString('ja-JP') : 'なし',
++    notificationTime: notificationTime ? notificationTime.toLocaleString('ja-JP') : 'なし'
++  });
+   
+   // ステータス判定
+   let status: Task['status'] = 'todo';
+@@ -97,28 +139,30 @@ const parseDatetime = (input: string) => {
+   const now = new Date();
+   let dueDate: Date | undefined;
+   let notificationTime: Date | undefined;
+-  
+-  // 明日15時
++
++  // 明日15時 - 時間指定がある場合はdueDateとnotificationTimeの両方を設定
+   const tomorrowMatch = input.match(/明日\s*(\d{1,2})時/);
+   if (tomorrowMatch) {
+     const hour = parseInt(tomorrowMatch[1]);
+     const tomorrow = new Date(now);
+     tomorrow.setDate(tomorrow.getDate() + 1);
+     tomorrow.setHours(hour, 0, 0, 0);
++    dueDate = new Date(tomorrow); // dueDateも設定
+     notificationTime = tomorrow;
+-    console.log('Tomorrow match found:', tomorrow);
++    console.log('Tomorrow with time match found:', tomorrow);
+   }
+-  
+-  // 今日17時
++
++  // 今日17時 - 時間指定がある場合はdueDateとnotificationTimeの両方を設定
+   const todayMatch = input.match(/今日\s*(\d{1,2})時/);
+   if (todayMatch) {
+     const hour = parseInt(todayMatch[1]);
+     const today = new Date(now);
+     today.setHours(hour, 0, 0, 0);
++    dueDate = new Date(today); // dueDateも設定
+     notificationTime = today;
+-    console.log('Today match found:', today);
++    console.log('Today with time match found:', today);
+   }
+-  
++
+   // 明日（時間指定なし）
+   if (input.includes('明日') && !tomorrowMatch) {
+     const tomorrow = new Date(now);
+@@ -127,7 +171,7 @@ const parseDatetime = (input: string) => {
+     dueDate = tomorrow;
+     console.log('Tomorrow dueDate set:', tomorrow);
+   }
+-  
++
+   // 今日（時間指定なし）
+   if (input.includes('今日') && !todayMatch) {
+     const today = new Date(now);
+@@ -135,7 +179,7 @@ const parseDatetime = (input: string) => {
+     dueDate = today;
+     console.log('Today dueDate set:', today);
+   }
+-  
++
+   // 曜日指定
+   const dayMap: Record<string, number> = { 月: 1, 火: 2, 水: 3, 木: 4, 金: 5, 土: 6, 日: 0 };
+   const dayMatch = input.match(/(月|火|水|木|金|土|日)曜日?/);
+@@ -144,18 +188,22 @@ const parseDatetime = (input: string) => {
+     const nextWeekday = new Date(now);
+     const daysUntilTarget = (targetDay - now.getDay() + 7) % 7 || 7;
+     nextWeekday.setDate(now.getDate() + daysUntilTarget);
++    nextWeekday.setHours(23, 59, 59, 999); // その日の終わりまで
+     dueDate = nextWeekday;
+     console.log('Day match found:', nextWeekday);
+   }
+-  
++
+   // 2時間後
+   const hoursMatch = input.match(/(\d+)時間後/);
+   if (hoursMatch) {
+     const hours = parseInt(hoursMatch[1]);
+-    notificationTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
+-    console.log('Hours match found:', notificationTime);
++    const futureTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
++    dueDate = new Date(futureTime); // dueDateも設定
++    notificationTime = futureTime;
++    console.log('Hours match found:', futureTime);
+   }
+-  
++
++  console.log('parseDatetime result:', { dueDate, notificationTime });
+   return { dueDate, notificationTime };
+ };
+ 
+@@ -164,7 +212,28 @@ const STORAGE_KEYS = {
+   TASKS: 'familytasks_tasks',
+   PROJECTS: 'familytasks_projects',
+   WORKSPACES: 'familytasks_workspaces',
+-  CURRENT_WORKSPACE: 'familytasks_current_workspace'
++  CURRENT_WORKSPACE: 'familytasks_current_workspace',
++  USER_SETTINGS: 'familytasks_user_settings',
++  GOOGLE_ACCESS_TOKEN: 'familytasks_google_access_token',
++  GOOGLE_TOKEN_EXPIRY: 'familytasks_google_token_expiry'
++};
++
++// Default settings
++const DEFAULT_WORKING_HOURS: WorkingHours = {
++  monday: { start: '09:00', end: '18:00', enabled: true },
++  tuesday: { start: '09:00', end: '18:00', enabled: true },
++  wednesday: { start: '09:00', end: '18:00', enabled: true },
++  thursday: { start: '09:00', end: '18:00', enabled: true },
++  friday: { start: '09:00', end: '18:00', enabled: true },
++  saturday: { start: '10:00', end: '16:00', enabled: false },
++  sunday: { start: '10:00', end: '16:00', enabled: false }
++};
++
++const DEFAULT_USER_SETTINGS: UserSettings = {
++  workingHours: DEFAULT_WORKING_HOURS,
++  googleCalendarEnabled: false,
++  defaultTaskDuration: 60, // 1 hour
++  bufferTime: 15 // 15 minutes
+ };
+ 
+ const loadFromStorage = <T,>(key: string, defaultValue: T): T => {
+@@ -200,24 +269,31 @@ const saveToStorage = <T,>(key: string, value: T): void => {
+ const FamilyTasksPWA: React.FC = () => {
+   // State
+   const [tasks, setTasks] = useState<Task[]>(() => loadFromStorage(STORAGE_KEYS.TASKS, []));
+-  const [projects, setProjects] = useState<Project[]>(() => loadFromStorage(STORAGE_KEYS.PROJECTS, [
++  const [projects] = useState<Project[]>(() => loadFromStorage(STORAGE_KEYS.PROJECTS, [
+     { id: '1', name: '家事', color: '#10B981', icon: '🏠' },
+     { id: '2', name: '仕事', color: '#3B82F6', icon: '💼' },
+     { id: '3', name: '買い物', color: '#F59E0B', icon: '🛒' }
+   ]));
+-  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => loadFromStorage(STORAGE_KEYS.WORKSPACES, [
++  const [workspaces] = useState<Workspace[]>(() => loadFromStorage(STORAGE_KEYS.WORKSPACES, [
+     { id: '1', name: 'プライベート', color: '#3B82F6' },
+     { id: '2', name: '家族', color: '#10B981' }
+   ]));
+-  const [currentWorkspace, setCurrentWorkspace] = useState<string>(() => 
++  const [currentWorkspace, setCurrentWorkspace] = useState<string>(() =>
+     loadFromStorage(STORAGE_KEYS.CURRENT_WORKSPACE, '1')
+   );
++  const [userSettings, setUserSettings] = useState<UserSettings>(() =>
++    loadFromStorage(STORAGE_KEYS.USER_SETTINGS, DEFAULT_USER_SETTINGS)
++  );
+   
+   const [quickInput, setQuickInput] = useState('');
+   const [searchQuery, setSearchQuery] = useState('');
+   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+   const [showSettings, setShowSettings] = useState(false);
++  const [showCalendarSettings, setShowCalendarSettings] = useState(false);
++  const [showScheduleView, setShowScheduleView] = useState(false);
+   const [notification, setNotification] = useState<string>('');
++  const [isAddingTask, setIsAddingTask] = useState(false);
++  const [isSchedulingTask, setIsSchedulingTask] = useState(false);
+   
+   const quickInputRef = useRef<HTMLInputElement>(null);
+   
+@@ -225,23 +301,29 @@ const FamilyTasksPWA: React.FC = () => {
+   useEffect(() => {
+     saveToStorage(STORAGE_KEYS.TASKS, tasks);
+   }, [tasks]);
+-  
++
+   useEffect(() => {
+     saveToStorage(STORAGE_KEYS.PROJECTS, projects);
+   }, [projects]);
+-  
++
+   useEffect(() => {
+     saveToStorage(STORAGE_KEYS.WORKSPACES, workspaces);
+   }, [workspaces]);
+-  
++
+   useEffect(() => {
+     saveToStorage(STORAGE_KEYS.CURRENT_WORKSPACE, currentWorkspace);
+   }, [currentWorkspace]);
++
++  useEffect(() => {
++    saveToStorage(STORAGE_KEYS.USER_SETTINGS, userSettings);
++  }, [userSettings]);
+   
+   // Quick add task
+-  const handleQuickAdd = () => {
+-    if (!quickInput.trim()) return;
+-    
++  const handleQuickAdd = async () => {
++    if (!quickInput.trim() || isAddingTask) return;
++
++    setIsAddingTask(true);
++
+     const parsed = parseQuickInput(quickInput);
+     const newTask: Task = {
+       id: Date.now().toString(),
+@@ -254,20 +336,82 @@ const FamilyTasksPWA: React.FC = () => {
+       dueDate: parsed.dueDate,
+       notificationTime: parsed.notificationTime,
+       createdAt: new Date(),
+-      updatedAt: new Date()
++      updatedAt: new Date(),
++      workspace: currentWorkspace
+     };
+-    
++
++    // Auto-schedule to Google Calendar if enabled and has due date
++    console.log('Calendar scheduling check:', {
++      googleCalendarEnabled: userSettings.googleCalendarEnabled,
++      isSignedIn: isSignedIn(),
++      hasDueDate: !!newTask.dueDate,
++      taskTitle: newTask.title,
++      dueDate: newTask.dueDate,
++      userSettings: userSettings
++    });
++
++    if (userSettings.googleCalendarEnabled && isSignedIn() && newTask.dueDate) {
++      try {
++        // Show progress notification
++        setNotification('📅 Googleカレンダーにスケジュール中...');
++
++        console.log('Starting calendar scheduling for task:', newTask.title);
++        const estimation = estimateTaskTime(newTask);
++        console.log('Task estimation:', estimation);
++
++        setNotification('🔍 最適な時間を検索中...');
++        const calendarEvents = await scheduleTask(
++          newTask,
++          estimation,
++          userSettings.workingHours,
++          userSettings.bufferTime
++        );
++        console.log('Generated calendar events:', calendarEvents);
++
++        // Create events in Google Calendar
++        setNotification('📝 カレンダーイベントを作成中...');
++        const googleEvents = [];
++        for (let i = 0; i < calendarEvents.length; i++) {
++          const event = calendarEvents[i];
++          setNotification(`📝 イベント作成中... (${i + 1}/${calendarEvents.length})`);
++          console.log('Creating calendar event:', event);
++          const googleEvent = await createEvent(event, newTask.title);
++          console.log('Created Google event:', googleEvent);
++          googleEvents.push({
++            ...event,
++            googleEventId: googleEvent.id
++          });
++        }
++
++        newTask.calendarEvents = googleEvents;
++        newTask.scheduledStartDate = calendarEvents[0]?.startTime;
++        newTask.scheduledEndDate = calendarEvents[calendarEvents.length - 1]?.endTime;
++        console.log('Successfully scheduled task to calendar');
++      } catch (error) {
++        console.error('Failed to schedule task to calendar:', error);
++        setNotification('❌ カレンダー追加に失敗しました');
++        setTimeout(() => setNotification(''), 3000);
++        // Continue with task creation even if calendar scheduling fails
++      }
++    }
++
+     setTasks(prev => [newTask, ...prev]);
+     setQuickInput('');
+-    
++
+     // Show confirmation
+-    setNotification(`タスク「${newTask.title}」を追加しました`);
++    if (newTask.calendarEvents && newTask.calendarEvents.length > 0) {
++      setNotification(`タスク「${newTask.title}」をGoogleカレンダーに追加しました`);
++    } else {
++      setNotification(`タスク「${newTask.title}」を追加しました`);
++    }
+     setTimeout(() => setNotification(''), 3000);
+-    
++
+     // Schedule notification if needed
+     if (newTask.notificationTime) {
+       scheduleNotification(newTask);
+     }
++
++    setIsAddingTask(false);
+   };
+   
+   // Schedule browser notification
+@@ -318,13 +462,20 @@ const FamilyTasksPWA: React.FC = () => {
+   
+   // Update task status
+   const updateTaskStatus = (taskId: string, newStatus: Task['status']) => {
+-    setTasks(prev => prev.map(task => 
+-      task.id === taskId 
++    setTasks(prev => prev.map(task =>
++      task.id === taskId
+         ? { ...task, status: newStatus, updatedAt: new Date() }
+         : task
+     ));
+   };
+-  
++
++  // Update task
++  const updateTask = (updatedTask: Task) => {
++    setTasks(prev => prev.map(task =>
++      task.id === updatedTask.id ? updatedTask : task
++    ));
++  };
++
+   // Delete task
+   const deleteTask = (taskId: string) => {
+     setTasks(prev => prev.filter(task => task.id !== taskId));
+@@ -401,29 +552,37 @@ const FamilyTasksPWA: React.FC = () => {
+               isOverdue ? 'text-red-600 font-medium' : 'text-gray-600'
+             }`}>
+               <Calendar className="w-3 h-3" />
+-              <span>期限: {task.dueDate.toLocaleDateString('ja-JP', { 
+-                month: 'short', 
++              <span>期限: {task.dueDate.toLocaleDateString('ja-JP', {
++                month: 'short',
+                 day: 'numeric',
+                 weekday: 'short'
+               })}</span>
+               {isOverdue && <span className="text-red-500 font-bold">⚠️ 期限切れ</span>}
+             </div>
+           )}
+-          
++
+           {task.notificationTime && (
+             <div className={`flex items-center gap-1 text-xs ${
+               isUpcoming ? 'text-orange-600 font-medium' : 'text-gray-600'
+             }`}>
+               <Bell className="w-3 h-3" />
+-              <span>通知: {task.notificationTime.toLocaleString('ja-JP', { 
++              <span>通知: {task.notificationTime.toLocaleString('ja-JP', {
+                 month: 'short',
+                 day: 'numeric',
+-                hour: '2-digit', 
++                hour: '2-digit',
+                 minute: '2-digit'
+               })}</span>
+               {isUpcoming && <span className="text-orange-500">🔔 まもなく</span>}
+             </div>
+           )}
++
++          {/* Calendar integration status */}
++          {task.calendarEvents && task.calendarEvents.length > 0 && (
++            <div className="flex items-center gap-1 text-xs text-green-600">
++              <Calendar className="w-3 h-3" />
++              <span>📅 Googleカレンダーに追加済み ({task.calendarEvents.length}件)</span>
++            </div>
++          )}
+         </div>
+         
+         {/* Created date */}
+@@ -442,7 +601,7 @@ const FamilyTasksPWA: React.FC = () => {
+     status: Task['status']; 
+     tasks: Task[]; 
+     color: string 
+-  }> = ({ title, status, tasks, color }) => (
++  }> = ({ title, tasks, color }) => (
+     <div className="flex-1 min-w-0">
+       <div className="flex items-center gap-2 mb-3">
+         <div className={`w-3 h-3 rounded-full`} style={{ backgroundColor: color }}></div>
+@@ -491,13 +650,27 @@ const FamilyTasksPWA: React.FC = () => {
+             </div>
+             
+             <div className="flex items-center gap-2">
+-              <button 
++              <button
++                onClick={() => setShowScheduleView(true)}
++                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
++                title="スケジュール表示"
++              >
++                <Clock className="w-5 h-5" />
++              </button>
++              <button
++                onClick={() => setShowCalendarSettings(true)}
++                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
++                title="カレンダー設定"
++              >
++                <Calendar className="w-5 h-5" />
++              </button>
++              <button
+                 onClick={() => setShowSettings(!showSettings)}
+                 className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+               >
+                 <Settings className="w-5 h-5" />
+               </button>
+-              <button 
++              <button
+                 onClick={requestNotificationPermission}
+                 className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+               >
+@@ -518,15 +691,27 @@ const FamilyTasksPWA: React.FC = () => {
+                 type="text"
+                 value={quickInput}
+                 onChange={(e) => setQuickInput(e.target.value)}
+-                onKeyPress={(e) => e.key === 'Enter' && handleQuickAdd()}
+-                placeholder="タスクを追加: 「牛乳買う #買い物 @家事 明日15時」"
+-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
++                onKeyPress={(e) => e.key === 'Enter' && !isAddingTask && handleQuickAdd()}
++                placeholder={isAddingTask ? "タスクを追加中..." : "タスクを追加: 「牛乳買う #買い物 @家事 明日15時」"}
++                disabled={isAddingTask}
++                className={`w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
++                  isAddingTask ? 'bg-gray-100 cursor-not-allowed' : ''
++                }`}
+               />
+               <button
+                 onClick={handleQuickAdd}
+-                className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 bg-blue-500 text-white rounded hover:bg-blue-600"
++                disabled={isAddingTask}
++                className={`absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 rounded ${
++                  isAddingTask
++                    ? 'bg-gray-400 cursor-not-allowed'
++                    : 'bg-blue-500 hover:bg-blue-600'
++                } text-white`}
+               >
+-                <Plus className="w-5 h-5" />
++                {isAddingTask ? (
++                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
++                ) : (
++                  <Plus className="w-5 h-5" />
++                )}
+               </button>
+             </div>
+           </div>
+@@ -547,7 +732,13 @@ const FamilyTasksPWA: React.FC = () => {
+       
+       {/* Notification */}
+       {notification && (
+-        <div className="fixed top-32 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50">
++        <div className={`fixed top-32 left-1/2 transform -translate-x-1/2 text-white px-4 py-2 rounded-lg shadow-lg z-50 ${
++          notification.includes('❌') || notification.includes('失敗')
++            ? 'bg-red-500'
++            : notification.includes('📅') || notification.includes('🔍') || notification.includes('📝')
++            ? 'bg-blue-500'
++            : 'bg-green-500'
++        }`}>
+           {notification}
+         </div>
+       )}
+@@ -699,6 +890,82 @@ const FamilyTasksPWA: React.FC = () => {
+                 </div>
+               )}
+               
++              {/* Calendar integration button */}
++              {userSettings.googleCalendarEnabled && isSignedIn() && selectedTask.dueDate && (
++                <div className="pt-4 border-t border-gray-200">
++                  {selectedTask.calendarEvents && selectedTask.calendarEvents.length > 0 ? (
++                    <div className="text-sm text-green-600 flex items-center gap-2">
++                      <Calendar className="w-4 h-4" />
++                      <span>Googleカレンダーに追加済み ({selectedTask.calendarEvents.length}件)</span>
++                    </div>
++                  ) : (
++                    <button
++                      onClick={async () => {
++                        if (isSchedulingTask) return;
++                        setIsSchedulingTask(true);
++                        try {
++                          setNotification('📅 Googleカレンダーにスケジュール中...');
++                          const estimation = estimateTaskTime(selectedTask);
++                          const calendarEvents = await scheduleTask(
++                            selectedTask,
++                            estimation,
++                            userSettings.workingHours,
++                            userSettings.bufferTime
++                          );
++
++                          setNotification('📝 カレンダーイベントを作成中...');
++                          // Create events in Google Calendar
++                          const googleEvents = [];
++                          for (const event of calendarEvents) {
++                            const googleEvent = await createEvent(event, selectedTask.title);
++                            googleEvents.push({
++                              ...event,
++                              googleEventId: googleEvent.id
++                            });
++                          }
++
++                          const updatedTask = {
++                            ...selectedTask,
++                            calendarEvents: googleEvents,
++                            scheduledStartDate: calendarEvents[0]?.startTime,
++                            scheduledEndDate: calendarEvents[calendarEvents.length - 1]?.endTime
++                          };
++
++                          updateTask(updatedTask);
++                          setSelectedTask(updatedTask);
++                          setNotification(`✅ タスク「${selectedTask.title}」をGoogleカレンダーに追加しました`);
++                          setTimeout(() => setNotification(''), 3000);
++                        } catch (error) {
++                          console.error('Failed to schedule task:', error);
++                          setNotification('❌ カレンダーへの追加に失敗しました');
++                          setTimeout(() => setNotification(''), 3000);
++                        } finally {
++                          setIsSchedulingTask(false);
++                        }
++                      }}
++                      disabled={isSchedulingTask}
++                      className={`w-full py-2 px-4 rounded flex items-center justify-center gap-2 ${
++                        isSchedulingTask
++                          ? 'bg-gray-400 cursor-not-allowed'
++                          : 'bg-blue-500 hover:bg-blue-600'
++                      } text-white`}
++                    >
++                      {isSchedulingTask ? (
++                        <>
++                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
++                          追加中...
++                        </>
++                      ) : (
++                        <>
++                          <Calendar className="w-4 h-4" />
++                          Googleカレンダーに追加
++                        </>
++                      )}
++                    </button>
++                  )}
++                </div>
++              )}
++
+               <div className="flex gap-2 pt-4">
+                 <button
+                   onClick={() => deleteTask(selectedTask.id)}
+@@ -718,6 +985,25 @@ const FamilyTasksPWA: React.FC = () => {
+           </div>
+         </div>
+       )}
++
++      {/* Calendar Settings Modal */}
++      {showCalendarSettings && (
++        <CalendarSettings
++          userSettings={userSettings}
++          onSettingsChange={setUserSettings}
++          onClose={() => setShowCalendarSettings(false)}
++        />
++      )}
++
++      {/* Schedule View Modal */}
++      {showScheduleView && (
++        <ScheduleView
++          tasks={tasks}
++          userSettings={userSettings}
++          onTaskUpdate={updateTask}
++          onClose={() => setShowScheduleView(false)}
++        />
++      )}
+     </div>
+   );
+ };
+diff --git a/src/components/CalendarSettings.tsx b/src/components/CalendarSettings.tsx
+new file mode 100644
+index 0000000..ac74249
+--- /dev/null
++++ b/src/components/CalendarSettings.tsx
+@@ -0,0 +1,356 @@
++import React, { useState, useEffect } from 'react';
++import { Calendar, Clock, User, Settings as SettingsIcon, CheckCircle, XCircle } from 'lucide-react';
++import { WorkingHours, UserSettings } from '../App';
++import { 
++  initializeGoogleAPI, 
++  isSignedIn, 
++  signIn, 
++  signOut, 
++  getCurrentUser 
++} from '../services/googleCalendar';
++
++interface CalendarSettingsProps {
++  userSettings: UserSettings;
++  onSettingsChange: (settings: UserSettings) => void;
++  onClose: () => void;
++}
++
++const CalendarSettings: React.FC<CalendarSettingsProps> = ({
++  userSettings,
++  onSettingsChange,
++  onClose
++}) => {
++  const [settings, setSettings] = useState<UserSettings>(userSettings);
++  const [isGoogleAPIReady, setIsGoogleAPIReady] = useState(false);
++  const [isSigningIn, setIsSigningIn] = useState(false);
++  const [currentUser, setCurrentUser] = useState<any>(null);
++
++  // Initialize Google API on component mount
++  useEffect(() => {
++    let intervalId: number | null = null;
++
++    const initAPI = async () => {
++      const success = await initializeGoogleAPI();
++      setIsGoogleAPIReady(success);
++
++      if (success) {
++        // Check initial sign-in status (this will also restore from storage)
++        if (isSignedIn()) {
++          const user = await getCurrentUser();
++          if (user) {
++            setCurrentUser(user);
++            setSettings((prev: UserSettings) => ({ ...prev, googleCalendarEnabled: true }));
++          }
++        }
++
++        // Note: GIS doesn't have a built-in auth state listener like the old auth2
++        // We'll rely on the periodic check and manual updates
++
++        // Set up a periodic check for auth status
++        const checkAuthStatus = async () => {
++          if (isSignedIn()) {
++            const user = await getCurrentUser();
++            if (user && !currentUser) {
++              setCurrentUser(user);
++              setSettings((prev: UserSettings) => ({ ...prev, googleCalendarEnabled: true }));
++            }
++          }
++        };
++
++        intervalId = setInterval(checkAuthStatus, 2000);
++      }
++    };
++
++    initAPI();
++
++    // Cleanup function
++    return () => {
++      if (intervalId) {
++        clearInterval(intervalId);
++      }
++    };
++  }, [currentUser]);
++
++  // Handle Google sign in
++  const handleGoogleSignIn = async () => {
++    setIsSigningIn(true);
++    try {
++      const success = await signIn();
++
++      if (success) {
++        // Wait a moment for the auth state to update, then check multiple times
++        const checkUser = async (attempt: number = 0) => {
++          const user = await getCurrentUser();
++
++          if (user) {
++            setCurrentUser(user);
++            setSettings((prev: UserSettings) => ({ ...prev, googleCalendarEnabled: true }));
++          } else if (attempt < 5) {
++            // Retry up to 5 times with increasing delays
++            setTimeout(() => checkUser(attempt + 1), (attempt + 1) * 200);
++          }
++        };
++
++        setTimeout(() => checkUser(), 100);
++      }
++    } catch (error) {
++      console.error('Failed to sign in:', error);
++    } finally {
++      setIsSigningIn(false);
++    }
++  };
++
++  // Handle Google sign out
++  const handleGoogleSignOut = async () => {
++    try {
++      await signOut();
++      setCurrentUser(null);
++      setSettings((prev: UserSettings) => ({ ...prev, googleCalendarEnabled: false }));
++    } catch (error) {
++      console.error('Failed to sign out:', error);
++    }
++  };
++
++  // Handle working hours change
++  const handleWorkingHoursChange = (
++    day: keyof WorkingHours,
++    field: 'start' | 'end' | 'enabled',
++    value: string | boolean
++  ) => {
++    setSettings((prev: UserSettings) => ({
++      ...prev,
++      workingHours: {
++        ...prev.workingHours,
++        [day]: {
++          ...prev.workingHours[day],
++          [field]: value
++        }
++      }
++    }));
++  };
++
++  // Save settings
++  const handleSave = () => {
++    console.log('Saving calendar settings:', settings);
++    onSettingsChange(settings);
++    onClose();
++  };
++
++  // Reset to defaults
++  const handleReset = () => {
++    setSettings(userSettings);
++  };
++
++  const dayLabels: Record<keyof WorkingHours, string> = {
++    monday: '月曜日',
++    tuesday: '火曜日',
++    wednesday: '水曜日',
++    thursday: '木曜日',
++    friday: '金曜日',
++    saturday: '土曜日',
++    sunday: '日曜日'
++  };
++
++  return (
++    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
++      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
++        <div className="p-6">
++          <div className="flex items-center justify-between mb-6">
++            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
++              <SettingsIcon className="w-5 h-5" />
++              カレンダー設定
++            </h2>
++            <button
++              onClick={onClose}
++              className="text-gray-400 hover:text-gray-600"
++            >
++              <XCircle className="w-6 h-6" />
++            </button>
++          </div>
++
++          {/* Google Calendar Integration */}
++          <div className="mb-8">
++            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
++              <Calendar className="w-5 h-5" />
++              Googleカレンダー連携
++            </h3>
++            
++            {!isGoogleAPIReady ? (
++              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
++                <div className="text-yellow-800 font-medium mb-2">Google APIを初期化中...</div>
++                <div className="text-sm text-yellow-700">
++                  初期化に時間がかかる場合は、Google API認証情報が正しく設定されているか確認してください。
++                  <br />
++                  .envファイルにVITE_GOOGLE_CLIENT_IDとVITE_GOOGLE_API_KEYを設定する必要があります。
++                </div>
++              </div>
++            ) : (
++              <div className="space-y-4">
++                {currentUser ? (
++                  <div className="flex items-center justify-between p-4 bg-green-50 border border-green-200 rounded-lg">
++                    <div className="flex items-center gap-3">
++                      <CheckCircle className="w-5 h-5 text-green-600" />
++                      <div>
++                        <div className="font-medium text-green-900">
++                          {currentUser.name}
++                        </div>
++                        <div className="text-sm text-green-700">
++                          {currentUser.email}
++                        </div>
++                      </div>
++                    </div>
++                    <button
++                      onClick={handleGoogleSignOut}
++                      className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
++                    >
++                      サインアウト
++                    </button>
++                  </div>
++                ) : (
++                  <div>
++                    <div className="flex items-center justify-between p-4 bg-gray-50 border border-gray-200 rounded-lg">
++                      <div className="flex items-center gap-3">
++                        <User className="w-5 h-5 text-gray-400" />
++                        <div className="text-gray-600">
++                          Googleカレンダーに接続されていません
++                        </div>
++                      </div>
++                      <button
++                        onClick={handleGoogleSignIn}
++                        disabled={isSigningIn}
++                        className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
++                      >
++                        {isSigningIn ? 'サインイン中...' : 'Googleでサインイン'}
++                      </button>
++                    </div>
++                    <div className="mt-2 text-xs text-gray-500">
++                      ※ ポップアップがブロックされた場合は、ブラウザの設定でポップアップを許可してください
++                    </div>
++                  </div>
++                )}
++              </div>
++            )}
++          </div>
++
++          {/* Working Hours */}
++          <div className="mb-8">
++            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
++              <Clock className="w-5 h-5" />
++              就業時間設定
++            </h3>
++            
++            <div className="space-y-3">
++              {Object.entries(dayLabels).map(([day, label]) => {
++                const dayKey = day as keyof WorkingHours;
++                const dayConfig = settings.workingHours[dayKey];
++                
++                return (
++                  <div key={day} className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg">
++                    <div className="w-16">
++                      <label className="flex items-center">
++                        <input
++                          type="checkbox"
++                          checked={dayConfig.enabled}
++                          onChange={(e) => handleWorkingHoursChange(dayKey, 'enabled', e.target.checked)}
++                          className="mr-2"
++                        />
++                        <span className="text-sm font-medium">{label}</span>
++                      </label>
++                    </div>
++                    
++                    <div className="flex items-center gap-2 flex-1">
++                      <input
++                        type="time"
++                        value={dayConfig.start}
++                        onChange={(e) => handleWorkingHoursChange(dayKey, 'start', e.target.value)}
++                        disabled={!dayConfig.enabled}
++                        className="px-3 py-1 border border-gray-300 rounded text-sm disabled:bg-gray-100"
++                      />
++                      <span className="text-gray-500">〜</span>
++                      <input
++                        type="time"
++                        value={dayConfig.end}
++                        onChange={(e) => handleWorkingHoursChange(dayKey, 'end', e.target.value)}
++                        disabled={!dayConfig.enabled}
++                        className="px-3 py-1 border border-gray-300 rounded text-sm disabled:bg-gray-100"
++                      />
++                    </div>
++                  </div>
++                );
++              })}
++            </div>
++          </div>
++
++          {/* Task Settings */}
++          <div className="mb-8">
++            <h3 className="text-lg font-semibold text-gray-900 mb-4">
++              タスク設定
++            </h3>
++            
++            <div className="space-y-4">
++              <div>
++                <label className="block text-sm font-medium text-gray-700 mb-2">
++                  デフォルトタスク時間（分）
++                </label>
++                <input
++                  type="number"
++                  min="15"
++                  max="480"
++                  step="15"
++                  value={settings.defaultTaskDuration}
++                  onChange={(e) => setSettings((prev: UserSettings) => ({
++                    ...prev,
++                    defaultTaskDuration: parseInt(e.target.value) || 60
++                  }))}
++                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
++                />
++              </div>
++              
++              <div>
++                <label className="block text-sm font-medium text-gray-700 mb-2">
++                  タスク間のバッファ時間（分）
++                </label>
++                <input
++                  type="number"
++                  min="0"
++                  max="60"
++                  step="5"
++                  value={settings.bufferTime}
++                  onChange={(e) => setSettings((prev: UserSettings) => ({
++                    ...prev,
++                    bufferTime: parseInt(e.target.value) || 15
++                  }))}
++                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
++                />
++              </div>
++            </div>
++          </div>
++
++          {/* Action Buttons */}
++          <div className="flex justify-end gap-3">
++            <button
++              onClick={handleReset}
++              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
++            >
++              リセット
++            </button>
++            <button
++              onClick={onClose}
++              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
++            >
++              キャンセル
++            </button>
++            <button
++              onClick={handleSave}
++              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
++            >
++              保存
++            </button>
++          </div>
++        </div>
++      </div>
++    </div>
++  );
++};
++
++export default CalendarSettings;
+diff --git a/src/components/ScheduleView.tsx b/src/components/ScheduleView.tsx
+new file mode 100644
+index 0000000..b418327
+--- /dev/null
++++ b/src/components/ScheduleView.tsx
+@@ -0,0 +1,378 @@
++import React, { useState, useEffect } from 'react';
++import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
++import { Task, CalendarEvent, UserSettings } from '../App';
++import { scheduleTask, estimateTaskTime } from '../services/scheduler';
++import { createEvent } from '../services/googleCalendar';
++
++interface ScheduleViewProps {
++  tasks: Task[];
++  userSettings: UserSettings;
++  onTaskUpdate: (task: Task) => void;
++  onClose: () => void;
++}
++
++const ScheduleView: React.FC<ScheduleViewProps> = ({
++  tasks,
++  userSettings,
++  onTaskUpdate,
++  onClose
++}) => {
++  const [currentDate, setCurrentDate] = useState(new Date());
++  const [viewMode, setViewMode] = useState<'day' | 'week'>('week');
++  const [scheduledTasks, setScheduledTasks] = useState<Task[]>([]);
++  const [isScheduling, setIsScheduling] = useState(false);
++
++  // Auto-schedule tasks when component mounts
++  useEffect(() => {
++    autoScheduleTasks();
++  }, [tasks, userSettings]);
++
++  // Auto-schedule unscheduled tasks
++  const autoScheduleTasks = async () => {
++    if (!userSettings.googleCalendarEnabled) return;
++
++    setIsScheduling(true);
++    const updatedTasks: Task[] = [];
++
++    for (const task of tasks) {
++      if (task.status !== 'done' && task.dueDate && !task.calendarEvents) {
++        try {
++          const estimation = estimateTaskTime(task);
++          const calendarEvents = await scheduleTask(
++            task,
++            estimation,
++            userSettings.workingHours,
++            userSettings.bufferTime
++          );
++
++          // Create events in Google Calendar
++          const googleEvents = [];
++          for (const event of calendarEvents) {
++            const googleEvent = await createEvent(event, task.title);
++            googleEvents.push({
++              ...event,
++              googleEventId: googleEvent.id
++            });
++          }
++
++          const updatedTask = {
++            ...task,
++            calendarEvents: googleEvents,
++            scheduledStartDate: calendarEvents[0]?.startTime,
++            scheduledEndDate: calendarEvents[calendarEvents.length - 1]?.endTime
++          };
++
++          updatedTasks.push(updatedTask);
++          onTaskUpdate(updatedTask);
++        } catch (error) {
++          console.error('Failed to schedule task:', task.title, error);
++        }
++      } else {
++        updatedTasks.push(task);
++      }
++    }
++
++    setScheduledTasks(updatedTasks);
++    setIsScheduling(false);
++  };
++
++  // Get tasks for current view
++  const getTasksForView = () => {
++    const startDate = getViewStartDate();
++    const endDate = getViewEndDate();
++
++    return scheduledTasks.filter(task => {
++      if (!task.calendarEvents) return false;
++      
++      return task.calendarEvents.some((event: CalendarEvent) =>
++        event.startTime >= startDate && event.startTime <= endDate
++      );
++    });
++  };
++
++  // Get view start date
++  const getViewStartDate = () => {
++    if (viewMode === 'day') {
++      const start = new Date(currentDate);
++      start.setHours(0, 0, 0, 0);
++      return start;
++    } else {
++      const start = new Date(currentDate);
++      const dayOfWeek = start.getDay();
++      start.setDate(start.getDate() - dayOfWeek);
++      start.setHours(0, 0, 0, 0);
++      return start;
++    }
++  };
++
++  // Get view end date
++  const getViewEndDate = () => {
++    if (viewMode === 'day') {
++      const end = new Date(currentDate);
++      end.setHours(23, 59, 59, 999);
++      return end;
++    } else {
++      const end = new Date(currentDate);
++      const dayOfWeek = end.getDay();
++      end.setDate(end.getDate() + (6 - dayOfWeek));
++      end.setHours(23, 59, 59, 999);
++      return end;
++    }
++  };
++
++  // Navigate to previous period
++  const navigatePrevious = () => {
++    const newDate = new Date(currentDate);
++    if (viewMode === 'day') {
++      newDate.setDate(newDate.getDate() - 1);
++    } else {
++      newDate.setDate(newDate.getDate() - 7);
++    }
++    setCurrentDate(newDate);
++  };
++
++  // Navigate to next period
++  const navigateNext = () => {
++    const newDate = new Date(currentDate);
++    if (viewMode === 'day') {
++      newDate.setDate(newDate.getDate() + 1);
++    } else {
++      newDate.setDate(newDate.getDate() + 7);
++    }
++    setCurrentDate(newDate);
++  };
++
++  // Get time slots for display
++  const getTimeSlots = () => {
++    const slots = [];
++    for (let hour = 6; hour < 24; hour++) {
++      slots.push({
++        time: `${hour.toString().padStart(2, '0')}:00`,
++        hour
++      });
++    }
++    return slots;
++  };
++
++  // Get events for specific time slot
++  const getEventsForSlot = (date: Date, hour: number) => {
++    const slotStart = new Date(date);
++    slotStart.setHours(hour, 0, 0, 0);
++    const slotEnd = new Date(date);
++    slotEnd.setHours(hour + 1, 0, 0, 0);
++
++    const events: Array<{ task: Task; event: CalendarEvent }> = [];
++    
++    for (const task of getTasksForView()) {
++      if (!task.calendarEvents) continue;
++      
++      for (const event of task.calendarEvents) {
++        if (event.startTime < slotEnd && event.endTime > slotStart) {
++          events.push({ task, event });
++        }
++      }
++    }
++    
++    return events;
++  };
++
++  // Get phase color
++  const getPhaseColor = (phase: CalendarEvent['phase']) => {
++    const colors: Record<CalendarEvent['phase'], string> = {
++      incubation: 'bg-blue-100 text-blue-800 border-blue-200',
++      design: 'bg-green-100 text-green-800 border-green-200',
++      implementation: 'bg-purple-100 text-purple-800 border-purple-200',
++      improvement: 'bg-red-100 text-red-800 border-red-200'
++    };
++    return colors[phase];
++  };
++
++  // Get phase label
++  const getPhaseLabel = (phase: CalendarEvent['phase']) => {
++    const labels: Record<CalendarEvent['phase'], string> = {
++      incubation: 'アイデア',
++      design: '設計',
++      implementation: '実装',
++      improvement: '改善'
++    };
++    return labels[phase];
++  };
++
++  // Render day view
++  const renderDayView = () => {
++    const timeSlots = getTimeSlots();
++    
++    return (
++      <div className="flex-1 overflow-auto">
++        <div className="grid grid-cols-2 gap-4">
++          <div className="space-y-1">
++            <div className="font-medium text-center py-2 bg-gray-50 rounded">
++              {currentDate.toLocaleDateString('ja-JP', { 
++                month: 'short', 
++                day: 'numeric',
++                weekday: 'short'
++              })}
++            </div>
++            {timeSlots.map(slot => {
++              const events = getEventsForSlot(currentDate, slot.hour);
++              return (
++                <div key={slot.time} className="flex border-b border-gray-100">
++                  <div className="w-16 text-sm text-gray-500 py-2 px-2">
++                    {slot.time}
++                  </div>
++                  <div className="flex-1 min-h-[60px] p-2">
++                    {events.map(({ task, event }, index) => (
++                      <div
++                        key={`${task.id}-${event.id}-${index}`}
++                        className={`text-xs p-2 rounded border mb-1 ${getPhaseColor(event.phase)}`}
++                      >
++                        <div className="font-medium truncate">{task.title}</div>
++                        <div className="text-xs opacity-75">
++                          {getPhaseLabel(event.phase)}
++                        </div>
++                      </div>
++                    ))}
++                  </div>
++                </div>
++              );
++            })}
++          </div>
++        </div>
++      </div>
++    );
++  };
++
++  // Render week view
++  const renderWeekView = () => {
++    const startDate = getViewStartDate();
++    const days: Date[] = [];
++
++    for (let i = 0; i < 7; i++) {
++      const day = new Date(startDate);
++      day.setDate(startDate.getDate() + i);
++      days.push(day);
++    }
++
++    const timeSlots = getTimeSlots();
++
++    return (
++      <div className="flex-1 overflow-auto">
++        <div className="grid grid-cols-8 gap-1">
++          <div className="w-16"></div>
++          {days.map(day => (
++            <div key={day.toISOString()} className="font-medium text-center py-2 bg-gray-50 rounded text-sm">
++              {day.toLocaleDateString('ja-JP', { 
++                month: 'short', 
++                day: 'numeric',
++                weekday: 'short'
++              })}
++            </div>
++          ))}
++          
++          {timeSlots.map(slot => (
++            <React.Fragment key={slot.time}>
++              <div className="w-16 text-sm text-gray-500 py-2 px-2 border-b border-gray-100">
++                {slot.time}
++              </div>
++              {days.map(day => {
++                const events = getEventsForSlot(day, slot.hour);
++                return (
++                  <div key={`${day.toISOString()}-${slot.time}`} className="min-h-[60px] p-1 border-b border-gray-100">
++                    {events.map(({ task, event }, index) => (
++                      <div
++                        key={`${task.id}-${event.id}-${index}`}
++                        className={`text-xs p-1 rounded border mb-1 ${getPhaseColor(event.phase)}`}
++                      >
++                        <div className="font-medium truncate text-xs">{task.title}</div>
++                        <div className="text-xs opacity-75">
++                          {getPhaseLabel(event.phase)}
++                        </div>
++                      </div>
++                    ))}
++                  </div>
++                );
++              })}
++            </React.Fragment>
++          ))}
++        </div>
++      </div>
++    );
++  };
++
++  return (
++    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
++      <div className="bg-white rounded-lg shadow-xl w-full h-full max-w-6xl max-h-[90vh] flex flex-col">
++        {/* Header */}
++        <div className="p-4 border-b border-gray-200">
++          <div className="flex items-center justify-between">
++            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
++              <Calendar className="w-5 h-5" />
++              スケジュール表示
++            </h2>
++            <button
++              onClick={onClose}
++              className="text-gray-400 hover:text-gray-600"
++            >
++              ×
++            </button>
++          </div>
++          
++          {/* Controls */}
++          <div className="flex items-center justify-between mt-4">
++            <div className="flex items-center gap-2">
++              <button
++                onClick={navigatePrevious}
++                className="p-2 hover:bg-gray-100 rounded"
++              >
++                <ChevronLeft className="w-4 h-4" />
++              </button>
++              <span className="font-medium">
++                {viewMode === 'day' 
++                  ? currentDate.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })
++                  : `${getViewStartDate().toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })} - ${getViewEndDate().toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })}`
++                }
++              </span>
++              <button
++                onClick={navigateNext}
++                className="p-2 hover:bg-gray-100 rounded"
++              >
++                <ChevronRight className="w-4 h-4" />
++              </button>
++            </div>
++            
++            <div className="flex items-center gap-2">
++              <button
++                onClick={() => setViewMode('day')}
++                className={`px-3 py-1 rounded text-sm ${
++                  viewMode === 'day' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'
++                }`}
++              >
++                日
++              </button>
++              <button
++                onClick={() => setViewMode('week')}
++                className={`px-3 py-1 rounded text-sm ${
++                  viewMode === 'week' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'
++                }`}
++              >
++                週
++              </button>
++              <button
++                onClick={autoScheduleTasks}
++                disabled={isScheduling}
++                className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50"
++              >
++                {isScheduling ? '調整中...' : '再調整'}
++              </button>
++            </div>
++          </div>
++        </div>
++
++        {/* Content */}
++        {viewMode === 'day' ? renderDayView() : renderWeekView()}
++      </div>
++    </div>
++  );
++};
++
++export default ScheduleView;
+diff --git a/src/services/googleCalendar.ts b/src/services/googleCalendar.ts
+new file mode 100644
+index 0000000..8ab6d74
+--- /dev/null
++++ b/src/services/googleCalendar.ts
+@@ -0,0 +1,560 @@
++import { CalendarEvent } from '../App';
++
++// Google Calendar API configuration
++const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
++const SCOPES = 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
++
++// Google API client instance
++let gapi: any = null;
++let tokenClient: any = null;
++let isInitialized = false;
++let accessToken: string | null = null;
++let tokenExpiry: number | null = null;
++
++// Storage keys
++const STORAGE_KEYS = {
++  ACCESS_TOKEN: 'familytasks_google_access_token',
++  TOKEN_EXPIRY: 'familytasks_google_token_expiry'
++};
++
++// Token management functions
++const saveTokenToStorage = (token: string, expiresIn: number) => {
++  const expiryTime = Date.now() + (expiresIn * 1000);
++  localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, token);
++  localStorage.setItem(STORAGE_KEYS.TOKEN_EXPIRY, expiryTime.toString());
++  accessToken = token;
++  tokenExpiry = expiryTime;
++};
++
++const loadTokenFromStorage = (): boolean => {
++  const storedToken = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
++  const storedExpiry = localStorage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
++
++  if (!storedToken || !storedExpiry) {
++    return false;
++  }
++
++  const expiryTime = parseInt(storedExpiry);
++  const now = Date.now();
++
++  // Check if token is still valid (with 5 minute buffer)
++  if (expiryTime - now < 5 * 60 * 1000) {
++    clearTokenFromStorage();
++    return false;
++  }
++
++  accessToken = storedToken;
++  tokenExpiry = expiryTime;
++  return true;
++};
++
++const clearTokenFromStorage = () => {
++  localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
++  localStorage.removeItem(STORAGE_KEYS.TOKEN_EXPIRY);
++  accessToken = null;
++  tokenExpiry = null;
++};
++
++const isTokenValid = (): boolean => {
++  if (!accessToken || !tokenExpiry) {
++    return false;
++  }
++
++  // Check if token is still valid (with 5 minute buffer)
++  return tokenExpiry - Date.now() > 5 * 60 * 1000;
++};
++
++// Auto-refresh token if needed
++export const ensureValidToken = async (): Promise<boolean> => {
++  if (isTokenValid()) {
++    return true;
++  }
++
++  // Try to restore from storage
++  if (loadTokenFromStorage()) {
++    return true;
++  }
++
++  // Token is expired or missing, user needs to sign in again
++  return false;
++};
++
++// Get token expiry info for debugging
++export const getTokenInfo = () => {
++  if (!accessToken || !tokenExpiry) {
++    return null;
++  }
++
++  const now = Date.now();
++  const timeUntilExpiry = tokenExpiry - now;
++
++  return {
++    hasToken: !!accessToken,
++    expiresAt: new Date(tokenExpiry),
++    timeUntilExpiry: Math.floor(timeUntilExpiry / 1000), // seconds
++    isValid: timeUntilExpiry > 5 * 60 * 1000 // 5 minute buffer
++  };
++};
++
++// Initialize Google API with GIS
++export const initializeGoogleAPI = async (): Promise<boolean> => {
++  try {
++    if (isInitialized) {
++      // Try to restore token from storage
++      loadTokenFromStorage();
++      return true;
++    }
++
++    // Try to restore token from storage first
++    loadTokenFromStorage();
++
++    // Load Google API script and GIS script
++    await Promise.all([
++      loadGoogleAPIScript(),
++      loadGISScript()
++    ]);
++
++    gapi = window.gapi;
++
++    // Load only client (no auth2)
++    await new Promise<void>((resolve, reject) => {
++      gapi.load('client', {
++        callback: resolve,
++        onerror: reject
++      });
++    });
++
++    await initializeGapiClient();
++    await initializeTokenClient();
++
++    isInitialized = true;
++    return true;
++  } catch (error) {
++    console.error('Failed to initialize Google API:', error);
++    return false;
++  }
++};
++
++// Load Google API script dynamically
++const loadGoogleAPIScript = (): Promise<void> => {
++  return new Promise((resolve, reject) => {
++    if (window.gapi) {
++      resolve();
++      return;
++    }
++    const script = document.createElement('script');
++    script.src = 'https://apis.google.com/js/api.js';
++    script.onload = () => resolve();
++    script.onerror = () => reject(new Error('Failed to load Google API script'));
++    document.head.appendChild(script);
++  });
++};
++
++// Load Google Identity Services script
++const loadGISScript = (): Promise<void> => {
++  return new Promise((resolve, reject) => {
++    if ((window as any).google?.accounts) {
++      resolve();
++      return;
++    }
++    const script = document.createElement('script');
++    script.src = 'https://accounts.google.com/gsi/client';
++    script.onload = () => resolve();
++    script.onerror = () => reject(new Error('Failed to load GIS script'));
++    document.head.appendChild(script);
++  });
++};
++
++// Initialize GAPI client (without auth)
++const initializeGapiClient = async () => {
++  const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
++
++
++
++  if (!apiKey) {
++    throw new Error('Google API key not configured. Please set VITE_GOOGLE_API_KEY in your .env file');
++  }
++
++  try {
++    await gapi.client.init({
++      apiKey: apiKey,
++      discoveryDocs: [DISCOVERY_DOC]
++    });
++
++
++  } catch (error) {
++    console.error('GAPI client initialization failed:', error);
++    throw error;
++  }
++};
++
++// Initialize Token Client for OAuth
++const initializeTokenClient = async () => {
++  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
++
++  if (!clientId) {
++    throw new Error('Google Client ID not configured. Please set VITE_GOOGLE_CLIENT_ID in your .env file');
++  }
++
++
++
++  try {
++    tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
++      client_id: clientId,
++      scope: SCOPES,
++      callback: (response: any) => {
++        if (response.access_token) {
++          // Save token to storage with expiry
++          const expiresIn = response.expires_in || 3600; // Default to 1 hour
++          saveTokenToStorage(response.access_token, expiresIn);
++        } else {
++          console.error('Failed to receive access token:', response);
++        }
++      },
++    });
++
++
++  } catch (error) {
++    console.error('Token client initialization failed:', error);
++    throw error;
++  }
++};
++
++// Check if user is signed in
++export const isSignedIn = (): boolean => {
++  // First check if we have a valid token in memory
++  if (isTokenValid()) {
++    return true;
++  }
++
++  // Try to restore from storage
++  if (loadTokenFromStorage()) {
++    return true;
++  }
++
++  return false;
++};
++
++// Sign in to Google using GIS
++export const signIn = async (): Promise<boolean> => {
++  try {
++    if (!tokenClient) {
++      const success = await initializeGoogleAPI();
++      if (!success) {
++        return false;
++      }
++    }
++
++    if (!tokenClient) {
++      return false;
++    }
++
++    return new Promise((resolve) => {
++      // Update callback to resolve promise
++      tokenClient.callback = (response: any) => {
++        if (response.access_token) {
++          // Save token to storage with expiry
++          const expiresIn = response.expires_in || 3600; // Default to 1 hour
++          saveTokenToStorage(response.access_token, expiresIn);
++          resolve(true);
++        } else {
++          console.error('Sign-in failed - no access token received:', response);
++          resolve(false);
++        }
++      };
++
++      // Request access token with specific prompt
++      tokenClient.requestAccessToken({
++        prompt: 'consent',
++        hint: 'select_account'
++      });
++    });
++  } catch (error) {
++    console.error('Failed to sign in:', error);
++    return false;
++  }
++};
++
++// Sign out from Google
++export const signOut = async (): Promise<void> => {
++  if (accessToken && (window as any).google?.accounts?.oauth2) {
++    try {
++      (window as any).google.accounts.oauth2.revoke(accessToken);
++    } catch (error) {
++      console.error('Failed to revoke token:', error);
++    }
++  }
++  clearTokenFromStorage();
++};
++
++// Get user's calendars
++export const getCalendars = async () => {
++  try {
++    if (!(await ensureValidToken())) {
++      throw new Error('User not signed in or token expired');
++    }
++
++    const response = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
++      headers: {
++        'Authorization': `Bearer ${accessToken}`,
++      },
++    });
++
++    if (!response.ok) {
++      throw new Error(`HTTP error! status: ${response.status}`);
++    }
++
++    const data = await response.json();
++    return data.items || [];
++  } catch (error) {
++    console.error('Failed to get calendars:', error);
++    throw error;
++  }
++};
++
++// Get events from calendar within date range
++export const getEvents = async (
++  calendarId: string = 'primary',
++  timeMin: Date,
++  timeMax: Date
++) => {
++  try {
++    if (!(await ensureValidToken())) {
++      throw new Error('User not signed in or token expired');
++    }
++
++    const url = `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events?` +
++      `timeMin=${timeMin.toISOString()}&` +
++      `timeMax=${timeMax.toISOString()}&` +
++      `singleEvents=true&` +
++      `orderBy=startTime`;
++
++    const response = await fetch(url, {
++      headers: {
++        'Authorization': `Bearer ${accessToken}`,
++      },
++    });
++
++    if (!response.ok) {
++      throw new Error(`HTTP error! status: ${response.status}`);
++    }
++
++    const data = await response.json();
++    return data.items || [];
++  } catch (error) {
++    console.error('Failed to get events:', error);
++    throw error;
++  }
++};
++
++// Create a new event in calendar
++export const createEvent = async (
++  calendarEvent: CalendarEvent,
++  taskTitle: string,
++  calendarId: string = 'primary'
++) => {
++  try {
++    console.log('createEvent: Checking token validity...');
++    if (!(await ensureValidToken())) {
++      throw new Error('User not signed in or token expired');
++    }
++    console.log('createEvent: Token is valid');
++
++    const event = {
++      summary: `${taskTitle} (${calendarEvent.phase})`,
++      description: `Task: ${taskTitle}\nPhase: ${calendarEvent.phase}`,
++      start: {
++        dateTime: calendarEvent.startTime.toISOString(),
++        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
++      },
++      end: {
++        dateTime: calendarEvent.endTime.toISOString(),
++        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
++      },
++      colorId: getPhaseColorId(calendarEvent.phase)
++    };
++
++    console.log('createEvent: Creating event:', event);
++    console.log('createEvent: Using token:', accessToken?.substring(0, 20) + '...');
++
++    const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`, {
++      method: 'POST',
++      headers: {
++        'Authorization': `Bearer ${accessToken}`,
++        'Content-Type': 'application/json',
++      },
++      body: JSON.stringify(event)
++    });
++
++    console.log('createEvent: Response status:', response.status);
++
++    if (!response.ok) {
++      const errorText = await response.text();
++      console.error('createEvent: Error response:', errorText);
++      throw new Error(`HTTP error! status: ${response.status}, body: ${errorText}`);
++    }
++
++    const result = await response.json();
++    console.log('createEvent: Success:', result);
++    return result;
++  } catch (error) {
++    console.error('Failed to create event:', error);
++    throw error;
++  }
++};
++
++// Update an existing event
++export const updateEvent = async (
++  eventId: string,
++  calendarEvent: CalendarEvent,
++  taskTitle: string,
++  calendarId: string = 'primary'
++) => {
++  try {
++    if (!isSignedIn()) {
++      throw new Error('User not signed in');
++    }
++
++    const event = {
++      summary: `${taskTitle} (${calendarEvent.phase})`,
++      description: `Task: ${taskTitle}\nPhase: ${calendarEvent.phase}`,
++      start: {
++        dateTime: calendarEvent.startTime.toISOString(),
++        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
++      },
++      end: {
++        dateTime: calendarEvent.endTime.toISOString(),
++        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
++      },
++      colorId: getPhaseColorId(calendarEvent.phase)
++    };
++
++    const response = await gapi.client.calendar.events.update({
++      calendarId: calendarId,
++      eventId: eventId,
++      resource: event
++    });
++
++    return response.result;
++  } catch (error) {
++    console.error('Failed to update event:', error);
++    throw error;
++  }
++};
++
++// Delete an event
++export const deleteEvent = async (
++  eventId: string,
++  calendarId: string = 'primary'
++) => {
++  try {
++    if (!isSignedIn()) {
++      throw new Error('User not signed in');
++    }
++
++    await gapi.client.calendar.events.delete({
++      calendarId: calendarId,
++      eventId: eventId
++    });
++
++    return true;
++  } catch (error) {
++    console.error('Failed to delete event:', error);
++    throw error;
++  }
++};
++
++// Get color ID for task phase
++const getPhaseColorId = (phase: string): string => {
++  const colorMap: Record<string, string> = {
++    incubation: '1',    // Blue
++    design: '2',        // Green
++    implementation: '3', // Purple
++    improvement: '4'    // Red
++  };
++  return colorMap[phase] || '1';
++};
++
++// Check if time slot is available
++export const isTimeSlotAvailable = async (
++  startTime: Date,
++  endTime: Date,
++  calendarId: string = 'primary'
++): Promise<boolean> => {
++  try {
++    const events = await getEvents(calendarId, startTime, endTime);
++    
++    // Check for overlapping events
++    for (const event of events) {
++      if (!event.start?.dateTime || !event.end?.dateTime) continue;
++      
++      const eventStart = new Date(event.start.dateTime);
++      const eventEnd = new Date(event.end.dateTime);
++      
++      // Check for overlap
++      if (startTime < eventEnd && endTime > eventStart) {
++        return false;
++      }
++    }
++    
++    return true;
++  } catch (error) {
++    console.error('Failed to check time slot availability:', error);
++    return false;
++  }
++};
++
++// Get current user info
++export const getCurrentUser = async () => {
++  if (!(await ensureValidToken())) {
++    return null;
++  }
++
++  try {
++    // Try the userinfo endpoint first
++    let response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
++      headers: {
++        'Authorization': `Bearer ${accessToken}`,
++      },
++    });
++
++    // If userinfo fails, try the People API
++    if (!response.ok) {
++      response = await fetch('https://people.googleapis.com/v1/people/me?personFields=names,emailAddresses,photos', {
++        headers: {
++          'Authorization': `Bearer ${accessToken}`,
++        },
++      });
++
++      if (response.ok) {
++        const peopleData = await response.json();
++        return {
++          id: peopleData.resourceName,
++          name: peopleData.names?.[0]?.displayName || 'Unknown',
++          email: peopleData.emailAddresses?.[0]?.value || 'Unknown',
++          imageUrl: peopleData.photos?.[0]?.url || ''
++        };
++      }
++    } else {
++      const userInfo = await response.json();
++      return {
++        id: userInfo.id,
++        name: userInfo.name,
++        email: userInfo.email,
++        imageUrl: userInfo.picture
++      };
++    }
++
++    throw new Error(`HTTP error! status: ${response.status}`);
++  } catch (error) {
++    console.error('Failed to get user info:', error);
++    return null;
++  }
++};
++
++// Declare global gapi type
++declare global {
++  interface Window {
++    gapi: any;
++  }
++}
+diff --git a/src/services/scheduler.ts b/src/services/scheduler.ts
+new file mode 100644
+index 0000000..cd960ef
+--- /dev/null
++++ b/src/services/scheduler.ts
+@@ -0,0 +1,295 @@
++import { Task, WorkingHours, CalendarEvent } from '../App';
++import { getEvents, isTimeSlotAvailable } from './googleCalendar';
++
++// Time slot interface
++interface TimeSlot {
++  start: Date;
++  end: Date;
++  duration: number; // minutes
++}
++
++// Task estimation interface (placeholder for AI integration)
++interface TaskEstimation {
++  incubation: number;    // minutes
++  design: number;        // minutes
++  implementation: number; // minutes
++  improvement: number;   // minutes
++  total: number;         // minutes
++  confidence: number;    // 0-1
++}
++
++// Find available time slots within working hours
++export const findAvailableTimeSlots = async (
++  startDate: Date,
++  endDate: Date,
++  workingHours: WorkingHours,
++  bufferTime: number = 15,
++  calendarId: string = 'primary'
++): Promise<TimeSlot[]> => {
++  const availableSlots: TimeSlot[] = [];
++  const currentDate = new Date(startDate);
++
++  while (currentDate <= endDate) {
++    const dayOfWeek = getDayOfWeek(currentDate);
++    const dayConfig = workingHours[dayOfWeek];
++
++    if (dayConfig.enabled) {
++      const daySlots = await findDayAvailableSlots(
++        currentDate,
++        dayConfig.start,
++        dayConfig.end,
++        bufferTime,
++        calendarId
++      );
++      availableSlots.push(...daySlots);
++    }
++
++    currentDate.setDate(currentDate.getDate() + 1);
++  }
++
++  return availableSlots;
++};
++
++// Find available slots for a specific day
++const findDayAvailableSlots = async (
++  date: Date,
++  startTime: string,
++  endTime: string,
++  bufferTime: number,
++  calendarId: string
++): Promise<TimeSlot[]> => {
++  const slots: TimeSlot[] = [];
++  
++  // Create start and end times for the day
++  const dayStart = new Date(date);
++  const [startHour, startMinute] = startTime.split(':').map(Number);
++  dayStart.setHours(startHour, startMinute, 0, 0);
++
++  const dayEnd = new Date(date);
++  const [endHour, endMinute] = endTime.split(':').map(Number);
++  dayEnd.setHours(endHour, endMinute, 0, 0);
++
++  try {
++    // Get existing events for the day
++    const events = await getEvents(calendarId, dayStart, dayEnd);
++    
++    // Sort events by start time
++    const sortedEvents = events
++      .filter((event: any) => event.start?.dateTime && event.end?.dateTime)
++      .map((event: any) => ({
++        start: new Date(event.start.dateTime),
++        end: new Date(event.end.dateTime)
++      }))
++      .sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
++
++    let currentTime = new Date(dayStart);
++
++    // Find gaps between events
++    for (const event of sortedEvents) {
++      if (currentTime < event.start) {
++        const slotEnd = new Date(event.start.getTime() - bufferTime * 60 * 1000);
++        if (slotEnd > currentTime) {
++          const duration = Math.floor((slotEnd.getTime() - currentTime.getTime()) / (60 * 1000));
++          if (duration >= 30) { // Minimum 30 minutes slot
++            slots.push({
++              start: new Date(currentTime),
++              end: new Date(slotEnd),
++              duration
++            });
++          }
++        }
++      }
++      currentTime = new Date(event.end.getTime() + bufferTime * 60 * 1000);
++    }
++
++    // Check for slot after last event
++    if (currentTime < dayEnd) {
++      const duration = Math.floor((dayEnd.getTime() - currentTime.getTime()) / (60 * 1000));
++      if (duration >= 30) {
++        slots.push({
++          start: new Date(currentTime),
++          end: new Date(dayEnd),
++          duration
++        });
++      }
++    }
++
++  } catch (error) {
++    console.error('Failed to find day available slots:', error);
++    // If calendar access fails, assume the entire working day is available
++    const duration = Math.floor((dayEnd.getTime() - dayStart.getTime()) / (60 * 1000));
++    slots.push({
++      start: new Date(dayStart),
++      end: new Date(dayEnd),
++      duration
++    });
++  }
++
++  return slots;
++};
++
++// Schedule task blocks based on estimation
++export const scheduleTask = async (
++  task: Task,
++  estimation: TaskEstimation,
++  workingHours: WorkingHours,
++  bufferTime: number = 15,
++  calendarId: string = 'primary'
++): Promise<CalendarEvent[]> => {
++  console.log('scheduleTask: Starting scheduling for task:', task.title);
++  if (!task.dueDate) {
++    throw new Error('Task must have a due date for scheduling');
++  }
++  console.log('scheduleTask: Task has due date:', task.dueDate);
++
++  const phases: Array<{ phase: CalendarEvent['phase']; duration: number }> = [
++    { phase: 'incubation' as const, duration: estimation.incubation },
++    { phase: 'design' as const, duration: estimation.design },
++    { phase: 'implementation' as const, duration: estimation.implementation },
++    { phase: 'improvement' as const, duration: estimation.improvement }
++  ].filter(p => p.duration > 0);
++
++  console.log('scheduleTask: Phases to schedule:', phases);
++
++  // Find available time slots from now until due date
++  const now = new Date();
++  const availableSlots = await findAvailableTimeSlots(
++    now,
++    task.dueDate,
++    workingHours,
++    bufferTime,
++    calendarId
++  );
++
++  // Schedule phases in reverse order (from due date backwards)
++  const scheduledEvents: CalendarEvent[] = [];
++  let remainingPhases = [...phases].reverse();
++
++  for (const slot of availableSlots.reverse()) {
++    if (remainingPhases.length === 0) break;
++
++    let slotStart = new Date(slot.start);
++    let remainingSlotTime = slot.duration;
++
++    while (remainingPhases.length > 0 && remainingSlotTime >= 30) {
++      const phase = remainingPhases[0];
++      const timeToAllocate = Math.min(phase.duration, remainingSlotTime);
++
++      const eventStart = new Date(slotStart);
++      const eventEnd = new Date(slotStart.getTime() + timeToAllocate * 60 * 1000);
++
++      scheduledEvents.push({
++        id: `${task.id}-${phase.phase}-${Date.now()}`,
++        taskId: task.id,
++        phase: phase.phase,
++        startTime: eventStart,
++        endTime: eventEnd
++      });
++
++      // Update remaining time for this phase
++      phase.duration -= timeToAllocate;
++      if (phase.duration <= 0) {
++        remainingPhases.shift();
++      }
++
++      // Update slot tracking
++      slotStart = new Date(eventEnd.getTime() + bufferTime * 60 * 1000);
++      remainingSlotTime -= (timeToAllocate + bufferTime);
++    }
++  }
++
++  if (remainingPhases.length > 0) {
++    throw new Error('Not enough available time to schedule all task phases before due date');
++  }
++
++  return scheduledEvents.reverse(); // Return in chronological order
++};
++
++// Get optimal task duration based on available slots
++export const getOptimalTaskDuration = (
++  availableSlots: TimeSlot[],
++  totalEstimatedTime: number
++): number => {
++  if (availableSlots.length === 0) return totalEstimatedTime;
++
++  const totalAvailableTime = availableSlots.reduce((sum, slot) => sum + slot.duration, 0);
++  
++  if (totalAvailableTime < totalEstimatedTime) {
++    console.warn('Not enough available time for estimated task duration');
++    return totalAvailableTime;
++  }
++
++  return totalEstimatedTime;
++};
++
++// Reschedule task when calendar changes
++export const rescheduleTask = async (
++  task: Task,
++  estimation: TaskEstimation,
++  workingHours: WorkingHours,
++  bufferTime: number = 15,
++  calendarId: string = 'primary'
++): Promise<CalendarEvent[]> => {
++  // Remove existing calendar events for this task
++  if (task.calendarEvents) {
++    // Note: In a real implementation, you would delete these from Google Calendar
++    console.log('Removing existing calendar events for task:', task.id);
++  }
++
++  // Schedule new events
++  return await scheduleTask(task, estimation, workingHours, bufferTime, calendarId);
++};
++
++// Utility function to get day of week key
++const getDayOfWeek = (date: Date): keyof WorkingHours => {
++  const days: Array<keyof WorkingHours> = [
++    'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'
++  ];
++  return days[date.getDay()];
++};
++
++// Check if a time slot conflicts with existing events
++export const hasTimeConflict = async (
++  startTime: Date,
++  endTime: Date,
++  calendarId: string = 'primary'
++): Promise<boolean> => {
++  return !(await isTimeSlotAvailable(startTime, endTime, calendarId));
++};
++
++// Get next available time slot of specified duration
++export const getNextAvailableSlot = async (
++  duration: number, // minutes
++  workingHours: WorkingHours,
++  bufferTime: number = 15,
++  calendarId: string = 'primary'
++): Promise<TimeSlot | null> => {
++  const now = new Date();
++  const oneWeekLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
++
++  const availableSlots = await findAvailableTimeSlots(
++    now,
++    oneWeekLater,
++    workingHours,
++    bufferTime,
++    calendarId
++  );
++
++  return availableSlots.find(slot => slot.duration >= duration) || null;
++};
++
++// Placeholder for AI estimation (to be implemented with AI service)
++export const estimateTaskTime = (_task: Task): TaskEstimation => {
++  // This is a placeholder implementation
++  // In the real implementation, this would call the AI service
++  const baseTime = 60; // 1 hour base time
++
++  return {
++    incubation: Math.floor(baseTime * 0.2),     // 20%
++    design: Math.floor(baseTime * 0.3),         // 30%
++    implementation: Math.floor(baseTime * 0.4), // 40%
++    improvement: Math.floor(baseTime * 0.1),    // 10%
++    total: baseTime,
++    confidence: 0.7
++  };
++};
+diff --git a/src/vite-env.d.ts b/src/vite-env.d.ts
+new file mode 100644
+index 0000000..6a343e7
+--- /dev/null
++++ b/src/vite-env.d.ts
+@@ -0,0 +1,10 @@
++/// <reference types="vite/client" />
++
++interface ImportMetaEnv {
++  readonly VITE_GOOGLE_CLIENT_ID: string
++  readonly VITE_GOOGLE_API_KEY: string
++}
++
++interface ImportMeta {
++  readonly env: ImportMetaEnv
++}
+diff --git a/vite.config.ts b/vite.config.ts
+index c30b615..144ac9f 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -8,7 +8,11 @@ export default defineConfig({
+     port: 3000,
+     strictPort: false,
+     hmr: {
+-      host: 'penguin.linux.test'
++      host: 'localhost'
++    },
++    headers: {
++      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
++      'Cross-Origin-Embedder-Policy': 'unsafe-none'
+     }
+   },
+   plugins: [
+-- 
+2.39.5 (Apple Git-154)
+

@@ -162,27 +162,38 @@ const ScheduleView: React.FC<ScheduleViewProps> = ({
     slotEnd.setHours(hour + 1, 0, 0, 0);
 
     const events: Array<{ task: Task; event: CalendarEvent }> = [];
-    
+
     for (const task of getTasksForView()) {
       if (!task.calendarEvents) continue;
-      
+
       for (const event of task.calendarEvents) {
         if (event.startTime < slotEnd && event.endTime > slotStart) {
           events.push({ task, event });
         }
       }
     }
-    
-    return events;
+
+    // Sort events by phase order (準備 -> 設計 -> 実装 -> 改善), then by start time
+    return events.sort((a, b) => {
+      const phaseOrderA = getPhaseOrder(a.event.phase);
+      const phaseOrderB = getPhaseOrder(b.event.phase);
+
+      if (phaseOrderA !== phaseOrderB) {
+        return phaseOrderA - phaseOrderB;
+      }
+
+      // If same phase, sort by start time
+      return a.event.startTime.getTime() - b.event.startTime.getTime();
+    });
   };
 
   // Get phase color
   const getPhaseColor = (phase: CalendarEvent['phase']) => {
     const colors: Record<CalendarEvent['phase'], string> = {
-      incubation: 'bg-blue-100 text-blue-800 border-blue-200',
-      design: 'bg-green-100 text-green-800 border-green-200',
-      implementation: 'bg-purple-100 text-purple-800 border-purple-200',
-      improvement: 'bg-red-100 text-red-800 border-red-200'
+      準備: 'bg-blue-100 text-blue-800 border-blue-200',
+      設計: 'bg-green-100 text-green-800 border-green-200',
+      実装: 'bg-purple-100 text-purple-800 border-purple-200',
+      改善: 'bg-red-100 text-red-800 border-red-200'
     };
     return colors[phase];
   };
@@ -190,12 +201,23 @@ const ScheduleView: React.FC<ScheduleViewProps> = ({
   // Get phase label
   const getPhaseLabel = (phase: CalendarEvent['phase']) => {
     const labels: Record<CalendarEvent['phase'], string> = {
-      incubation: 'アイデア',
-      design: '設計',
-      implementation: '実装',
-      improvement: '改善'
+      準備: '準備',
+      設計: '設計',
+      実装: '実装',
+      改善: '改善'
     };
     return labels[phase];
+  };
+
+  // Get phase order for sorting (準備 -> 設計 -> 実装 -> 改善)
+  const getPhaseOrder = (phase: CalendarEvent['phase']): number => {
+    const order: Record<CalendarEvent['phase'], number> = {
+      準備: 1,
+      設計: 2,
+      実装: 3,
+      改善: 4
+    };
+    return order[phase] || 999;
   };
 
   // Render day view
